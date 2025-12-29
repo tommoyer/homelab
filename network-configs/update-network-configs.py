@@ -173,6 +173,9 @@ def parse_inventory_csv(path: str, servers_config: Dict[str, Any] = {}, user_vla
             for row in reader:
                 # --- Read Columns ---
                 node_name = row.get('Node', '').strip()
+                if not node_name:
+                    continue
+
                 lan_ip = row.get('LAN IP', '').strip()
                 vlan_raw = row.get('VLAN', '').strip()
                 subdomain = row.get('Subdomain', '').strip()
