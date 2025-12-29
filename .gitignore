@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+*.egg-info/
+
+# Environment Variables and Secrets
+.env
+.envrc
+*.env
+secrets.json
+*.pem
+*.key
+
+# Generated Data
+network-configs/external_records.json
+network-configs/dry-run/
+*.log
+node_modules/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Editor Directories
+.vscode/
+.idea/
