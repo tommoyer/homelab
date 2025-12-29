@@ -30,6 +30,7 @@
         ts-router.moyer.wtf    192.168.10.20
         tw-sync.moyer.wtf      192.168.10.21
         proxmox.moyer.wtf      192.168.10.29:8006
+        www.homelab.moyer.wtf  192.168.10.15:8888
 
         default                 unknown
     }
@@ -54,4 +55,18 @@
     handle {
         respond "Service not defined in Caddy Map" 404
     }
+}
+
+# ------------------------------------------------------------------
+# Public Web: thomasmoyer.org (redirect www -> apex)
+# ------------------------------------------------------------------
+thomasmoyer.org, www.thomasmoyer.org {
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    }
+
+    @www host www.thomasmoyer.org
+    redir @www https://thomasmoyer.org{uri}
+
+    reverse_proxy 192.168.10.15:8888
 }
