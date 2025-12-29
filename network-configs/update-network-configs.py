@@ -197,10 +197,14 @@ def parse_inventory_csv(path: str, servers_config: Dict[str, Any] = {}, user_vla
                     cf_name = access_fqdn if access_fqdn else infra_fqdn
                     
                     if cf_name and cf_target:
+                        # Naive domain extraction (SLD.TLD)
+                        domain = ".".join(cf_name.split('.')[-2:])
+
                         cf_records.append({
                             'name': cf_name,
                             'target': cf_target,
-                            'proxied': proxy_status in ('proxied', 'on', 'true', 'yes')
+                            'proxied': proxy_status in ('proxied', 'on', 'true', 'yes'),
+                            'domain': domain
                         })
 
                 # --- 2. Internal Processing (Pi-hole / Mikrotik) ---
@@ -310,6 +314,16 @@ def process_dnscontrol(records: List[Dict[str, Any]], args: argparse.Namespace) 
     
     print(f"\n--- DNSControl: Processing {len(records)} external records ---")
     
+    # In dry-run, save a copy to dry-run/ folder for inspection
+    if args.dry_run:
+        dry_run_json = os.path.join("dry-run", json_filename)
+        try:
+            with open(dry_run_json, 'w', encoding='utf-8') as f:
+                json.dump(records, f, indent=4)
+            print(f"  [Dry Run] Generated local file: {dry_run_json}")
+        except IOError as e:
+            print(f"Error writing {dry_run_json}: {e}", file=sys.stderr)
+
     try:
         with open(json_filename, 'w', encoding='utf-8') as f:
             json.dump(records, f, indent=4)
@@ -323,7 +337,6 @@ def process_dnscontrol(records: List[Dict[str, Any]], args: argparse.Namespace) 
         subprocess.run(["dnscontrol", "preview"], check=False) 
     except FileNotFoundError:
         print("Error: 'dnscontrol' command not found.", file=sys.stderr)
-        return
 
     if args.dry_run:
         print("Dry-run enabled: Skipping push.")
@@ -738,6 +751,17 @@ def process_vlan_mikrotik(vlan: str, dns_entries: List[Dict[str, Any]], firewall
         deploy_mikrotik_script(nat_filename, nat_lines, target_host, ssh_user, ssh_port, password, dry_run, keep_files)
 
 
+def find_closing_brace(text: str, start_index: int) -> int:
+    depth = 1
+    for i, char in enumerate(text[start_index:], start=start_index):
+        if char == '{':
+            depth += 1
+        elif char == '}':
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
 def process_caddyfile(records: List[Dict[str, str]], caddyfile_path: str, dry_run: bool) -> None:
     if not records:
         return
@@ -755,43 +779,122 @@ def process_caddyfile(records: List[Dict[str, str]], caddyfile_path: str, dry_ru
         print(f"[!] Error reading Caddyfile: {e}", file=sys.stderr)
         return
 
-    # Build new map content
-    # We want to align columns for readability
-    # Find max host length
-    max_host_len = max(len(r['host']) for r in records) if records else 0
-    indent = "        " # 8 spaces based on example
+    # 1. Find all site blocks and their maps
+    # Regex for site block start: start of line, non-whitespace chars (including comma), space, brace
+    # We want to capture the domain list.
+    site_start_re = re.compile(r'(?m)^([^\s{]+(?:,\s*[^\s{]+)*)\s+\{')
     
-    lines = []
-    for r in records:
-        host = r['host']
-        backend = r['backend']
-        # Padding
-        padding = " " * (max_host_len - len(host) + 4)
-        lines.append(f"{indent}{host}{padding}{backend}")
+    blocks = [] # List of dicts: {domains: [], map_match: match_object, start: int, end: int}
     
-    new_map_body = "\n".join(lines)
+    for match in site_start_re.finditer(content):
+        domain_str = match.group(1)
+        start_idx = match.end()
+        end_idx = find_closing_brace(content, start_idx)
+        
+        if end_idx == -1:
+            print(f"[Warning] Could not find closing brace for block: {domain_str}")
+            continue
+            
+        block_content = content[start_idx:end_idx]
+        
+        # Find map inside block
+        map_match = re.search(r'(map\s+\{host\}\s+\{backend\}\s+\{)(.*?)(\n\s+\})', block_content, re.DOTALL)
+        
+        if map_match:
+            # Parse domains
+            # Remove *. prefix
+            domains = []
+            for d in domain_str.split(','):
+                d = d.strip()
+                if d.startswith('*.'):
+                    domains.append(d[2:])
+                else:
+                    domains.append(d)
+            
+            blocks.append({
+                'domains': domains,
+                'map_match': map_match,
+                'block_start': start_idx,
+                'block_end': end_idx
+            })
 
-    # Regex to find the map block
-    # map {host} {backend} { ... }
-    pattern = re.compile(r'(map\s+\{host\}\s+\{backend\}\s+\{)(.*?)(\n\s+\})', re.DOTALL)
-    
-    match = pattern.search(content)
-    if not match:
-        print("[!] Error: Could not find 'map {host} {backend} { ... }' block in Caddyfile.", file=sys.stderr)
+    if not blocks:
+        print("[!] Error: No 'map {host} {backend}' blocks found in Caddyfile.", file=sys.stderr)
         return
 
-    # Preserve default unknown if present in the original block
-    existing_block = match.group(2)
-    has_default = "default" in existing_block and "unknown" in existing_block
+    # 2. Assign records to blocks
+    # We map each block index to a list of records
+    block_records = {i: [] for i in range(len(blocks))}
     
-    final_replacement = f"{match.group(1)}\n{indent}# Generated by update-network-configs.py on {datetime.datetime.now()}\n{new_map_body}\n"
-    
-    if has_default:
-        final_replacement += f"\n{indent}default                 unknown"
+    for r in records:
+        fqdn = r['host']
+        best_block_idx = -1
+        max_match_len = -1
         
-    final_replacement += match.group(3)
+        for i, block in enumerate(blocks):
+            for d in block['domains']:
+                # Check if fqdn ends with domain (and is preceded by dot or is exact match)
+                if fqdn == d or fqdn.endswith('.' + d):
+                    if len(d) > max_match_len:
+                        max_match_len = len(d)
+                        best_block_idx = i
+        
+        if best_block_idx != -1:
+            block_records[best_block_idx].append(r)
+        else:
+            print(f"  [Warning] No matching Caddyfile block found for: {fqdn}")
+
+    # 3. Generate updates
+    edits = [] # (start, end, replacement)
     
-    new_content = content[:match.start()] + final_replacement + content[match.end():]
+    for i, block in enumerate(blocks):
+        recs = block_records[i]
+        if not recs:
+            continue
+            
+        print(f"  Updating block for domains {block['domains']}: {len(recs)} records")
+        
+        # Build new map content
+        max_host_len = max(len(r['host']) for r in recs) if recs else 0
+        indent = "        "
+        
+        lines = []
+        for r in recs:
+            host = r['host']
+            backend = r['backend']
+            padding = " " * (max_host_len - len(host) + 4)
+            lines.append(f"{indent}{host}{padding}{backend}")
+        
+        new_map_body = "\n".join(lines)
+        
+        map_match = block['map_match']
+        existing_block = map_match.group(2)
+        has_default = "default" in existing_block and "unknown" in existing_block
+        
+        final_replacement = f"{map_match.group(1)}\n{indent}# Generated by update-network-configs.py on {datetime.datetime.now()}\n{new_map_body}\n"
+        
+        if has_default:
+            final_replacement += f"\n{indent}default                 unknown"
+            
+        final_replacement += map_match.group(3)
+        
+        # Calculate absolute positions
+        abs_start = block['block_start'] + map_match.start()
+        abs_end = block['block_start'] + map_match.end()
+        
+        edits.append((abs_start, abs_end, final_replacement))
+
+    # 4. Apply edits
+    if not edits:
+        print("  No changes to apply.")
+        return
+
+    # Sort edits reverse to apply safely
+    edits.sort(key=lambda x: x[0], reverse=True)
+    
+    new_content = content
+    for start, end, repl in edits:
+        new_content = new_content[:start] + repl + new_content[end:]
     
     if dry_run:
         dryrun_path = os.path.join("dry-run", "Caddyfile")
