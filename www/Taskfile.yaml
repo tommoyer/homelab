@@ -37,5 +37,5 @@ tasks:
     deps:
       - sync
     cmds:
-      - task: up
+      - task: pull
     silent: true

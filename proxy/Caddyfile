@@ -5,7 +5,7 @@
 # ------------------------------------------------------------------
 # Public Wildcard Handler (moyer.wtf)
 # ------------------------------------------------------------------
-*.moyer.wtf {
+*.moyer.wtf moyer.wtf {
     # 1. Cloudflare DNS Challenge for Wildcard Certs
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
@@ -28,6 +28,7 @@
         ts-router.moyer.wtf    192.168.10.20
         tw-sync.moyer.wtf      192.168.10.21
         proxmox.moyer.wtf      192.168.10.29:8006
+        moyer.wtf               unknown # Fix this eventually
 
         default                 unknown
     }
@@ -57,7 +58,7 @@
 # ------------------------------------------------------------------
 # Public Web: thomasmoyer.org (redirect www -> apex)
 # ------------------------------------------------------------------
-thomasmoyer.org, www.thomasmoyer.org {
+*.thomasmoyer.org thomasmoyer.org {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
