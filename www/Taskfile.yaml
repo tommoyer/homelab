@@ -1,0 +1,41 @@
+version: "3"
+
+vars:
+  host: '{{default "root@www.homelab.moyer.wtf" .WWW_HOST}}'
+  dest: '{{default "/opt/www" .WWW_PATH}}'
+
+tasks:
+  sync:
+    desc: Copy www files to the remote host.
+    preconditions:
+      - sh: "command -v tar >/dev/null"
+        msg: "tar is required"
+      - sh: "command -v ssh >/dev/null"
+        msg: "ssh is required"
+    cmds:
+      - ssh {{.host}} "mkdir -p {{.dest}}"
+      - tar --exclude='.env' -cf - . | ssh {{.host}} "tar -xf - -C {{.dest}}"
+
+  up:
+    desc: Start the service via docker compose on the remote host.
+    preconditions:
+      - sh: "command -v ssh >/dev/null"
+        msg: "ssh is required"
+    cmds:
+      - ssh {{.host}} "cd {{.dest}} && docker compose up -d"
+
+  pull:
+    desc: Pull the latest images and restart the containers.
+    preconditions:
+      - sh: "command -v ssh >/dev/null"
+        msg: "ssh is required"
+    cmds:
+      - ssh {{.host}} "cd {{.dest}} && docker compose pull && docker compose up -d"
+
+  deploy:
+    desc: Sync files then start the service.
+    deps:
+      - sync
+    cmds:
+      - task: up
+    silent: true

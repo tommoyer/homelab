@@ -1,0 +1,15 @@
+# ----- DEV: live reload via Hugo server -----
+services:
+  prod:
+    image: ghcr.io/tommoyer/www:latest
+    pull_policy: always
+    environment:
+      - PORT=8080
+    ports:
+      - "8080:8080"          # host:container
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
