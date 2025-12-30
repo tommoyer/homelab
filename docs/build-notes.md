@@ -59,7 +59,6 @@ This service relays multicast traffic between VLANs to support mDNS discovery ac
 The Homarr dashboard for managing and monitoring services
 
 - Installed via [Proxmox Helper Script for Homarr](https://community-scripts.github.io/ProxmoxVE/scripts?id=homarr)
-- Configuration managed in the `homarr` folder of this repository
 
 ## `proxy`
 
@@ -68,11 +67,64 @@ The Caddy reverse proxy serving services in the Homelab VLAN from the DMZ VLAN
 - Installed via [Proxmox Helper Script for Docker LXC](https://community-scripts.github.io/ProxmoxVE/scripts?id=docker&category=Containers+%26+Docker)
 - Dockerfile and configuration managed in the `proxy` folder of this repository
 
-## `ts-router`
+## `unifi`
 
-The Tailscale Subnet Router providing access to the Homelab VLAN from the DMZ VLAN
+The UniFi Network Controller managing the UniFi network devices
 
-- Base OS: Debian 13
-- Container/VM: LXC container via Proxmox
-- Added Tailscale via [Proxmox Helper Script for Tailscale](https://community-scripts.github.io/ProxmoxVE/scripts?id=add-tailscale-lxc)
-- Dockerfile and configuration managed in the `ts-router` folder of this repository
+- Installed via [Proxmox Helper Script for UniFi Controller](https://community-scripts.github.io/ProxmoxVE/scripts?id=unifi)
+
+## `tandoor`
+
+The Tandoor Recipes application for managing recipes and meal planning
+
+- Installed via [Proxmox Helper Script for Tandoor Recipes](https://community-scripts.github.io/ProxmoxVE/scripts?id=tandoor)
+
+## `uptime-kuma`
+
+The Uptime Kuma application for monitoring the uptime of services
+
+- Installed via [Proxmox Helper Script for Uptime Kuma](https://community-scripts.github.io/ProxmoxVE/scripts?id=uptimekuma)
+
+## `firefly-iii`
+
+The Firefly III application for personal finance management
+
+- Installed via [Proxmox Helper Script for Firefly III](https://community-scripts.github.io/ProxmoxVE/scripts?id=firefly)
+
+## `jellyfin`
+
+The Jellyfin media server for streaming media content
+
+- Installed via [Proxmox Helper Script for ](https://community-scripts.github.io/ProxmoxVE/scripts?id=jellyfin)
+
+## `syncthing`
+
+Syncthing for file synchronization across devices
+
+- Installed via [Proxmox Helper Script for ](https://community-scripts.github.io/ProxmoxVE/scripts?id=)
+
+## `gitea`
+
+Gitea for self-hosted Git repository management
+
+- Installed via [Proxmox Helper Script for ](https://community-scripts.github.io/ProxmoxVE/scripts?id=gitea)
+
+## `vaultwarden`
+
+Vaultwarden for self-hosted password management
+
+- Installed via [Proxmox Helper Script for ](https://community-scripts.github.io/ProxmoxVE/scripts?id=vaultwarden)
+
+## `Grafana`
+
+The Grafana application for data visualization and monitoring
+
+- Installed via [Proxmox Helper Script for ](https://community-scripts.github.io/ProxmoxVE/scripts?id=grafana)
+
+## `tiny-tiny-rss`
+
+The Tiny Tiny RSS application for RSS feed management
+
+- Installed via [Proxmox Helper Script for Docker LXC](https://community-scripts.github.io/ProxmoxVE/scripts?id=docker&category=Containers+%26+Docker)
+- Dockerfile and configuration managed in the `tt-rss` folder of this repository
+

@@ -24,19 +24,19 @@ user_vlan = "hivemind"
 # use_sudo = true/false (optional, defaults to false)
 
 [servers.hivemind]
-host = "pihole.hivemind.moyer.wtf"
+host = "192.168.1.4"
 type = "pihole"
 user = "tom-tom"
 include_access_fqdn = true
 use_sudo = true
 
 [servers.dmz]
-host = "pihole.dmz.moyer.wtf"
+host = "192.168.20.2"
 type = "pihole"
 user = "root"
 
 [servers.homelab]
-host = "pihole.homelab.moyer.wtf"
+host = "192.168.10.27"
 type = "pihole"
 user = "root"
 
