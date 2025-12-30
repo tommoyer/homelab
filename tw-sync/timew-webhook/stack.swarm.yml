@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  timew-webhook:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-example}/tw-sync-timew-webhook:latest
+    env_file: .env
+    environment:
+      - TOKEN=${TOKEN}
+    volumes:
+      - /srv/sync/timewarrior/.timewarrior:/var/lib/timew/.timewarrior
+    ports:
+      - target: 8000
+        published: 9000
+        protocol: tcp
+        mode: host
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.labels.timew.data==true
+      labels:
+        # Caddy example (TLS handled by your proxy; adjust domain)
+        # caddy: timew.example.internal
+        # caddy.reverse_proxy: "{{upstreams 8000}}"
+
+volumes: {}
