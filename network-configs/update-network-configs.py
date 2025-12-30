@@ -43,15 +43,32 @@ except ImportError:
 
 
 # --- Dependency Check: System Tools ---
-def load_config(config_path: str) -> Dict[str, Any]:
-    if not os.path.isfile(config_path):
-        return {}
-    try:
-        with open(config_path, 'rb') as f:
-            return tomllib.load(f)
-    except Exception as e:
-        print(f"Error reading config {config_path}: {e}", file=sys.stderr)
-        sys.exit(1)
+def load_config(config_path: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    # 1. Try path as provided (CWD or absolute)
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, 'rb') as f:
+                return tomllib.load(f), config_path
+        except Exception as e:
+            print(f"Error reading config {config_path}: {e}", file=sys.stderr)
+            sys.exit(1)
+            
+    # 2. Try relative to script directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    alt_path = os.path.join(script_dir, config_path)
+    
+    if os.path.isfile(alt_path):
+        print(f"[Info] Config not found at '{config_path}', using '{alt_path}'")
+        try:
+            with open(alt_path, 'rb') as f:
+                return tomllib.load(f), alt_path
+        except Exception as e:
+            print(f"Error reading config {alt_path}: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # 3. Not found
+    print(f"[Warning] Config file not found: {config_path}", file=sys.stderr)
+    return {}, None
 
 def check_prerequisites(needs_dnscontrol: bool = True) -> bool:
     """
@@ -429,13 +446,13 @@ def get_sshpass_prefix(password: Optional[str]) -> str:
 def scp_to_remote(local_path: str, remote_user_host: str, remote_tmp_path: str, ssh_port: Optional[str] = None, password: Optional[str] = None, dry_run: bool = False) -> Tuple[int, str, str]:
     port_flag = f"-P {ssh_port}" if ssh_port else ""
     prefix = get_sshpass_prefix(password)
-    cmd = f"{prefix}scp {port_flag} {shlex.quote(local_path)} {shlex.quote(remote_user_host)}:{shlex.quote(remote_tmp_path)}"
+    cmd = f"{prefix}scp -o LogLevel=ERROR {port_flag} {shlex.quote(local_path)} {shlex.quote(remote_user_host)}:{shlex.quote(remote_tmp_path)}"
     return run_cmd(cmd, explanation=f"Copying file to {remote_user_host}:{remote_tmp_path}", dry_run=dry_run)
 
 def scp_from_remote(remote_user_host: str, remote_path: str, local_path: str, ssh_port: Optional[str] = None, password: Optional[str] = None, dry_run: bool = False) -> Tuple[int, str, str]:
     port_flag = f"-P {ssh_port}" if ssh_port else ""
     prefix = get_sshpass_prefix(password)
-    cmd = f"{prefix}scp {port_flag} {shlex.quote(remote_user_host)}:{shlex.quote(remote_path)} {shlex.quote(local_path)}"
+    cmd = f"{prefix}scp -o LogLevel=ERROR {port_flag} {shlex.quote(remote_user_host)}:{shlex.quote(remote_path)} {shlex.quote(local_path)}"
     return run_cmd(cmd, explanation=f"Copying file from {remote_user_host}:{remote_path}", dry_run=dry_run)
 
 def ssh_run(remote_user_host: str, remote_cmd: str, ssh_port: Optional[str] = None, password: Optional[str] = None, dry_run: bool = False) -> Tuple[int, str, str]:
@@ -449,7 +466,8 @@ def ssh_run(remote_user_host: str, remote_cmd: str, ssh_port: Optional[str] = No
     # So we MUST remove BatchMode=yes if we are using sshpass.
     
     # Allow interactive password prompts if sshpass is not used (consistent with scp_to_remote)
-    opts = ""
+    # Suppress OpenSSH client WARNINGs (e.g., PQ KEX) to keep stderr signal clean
+    opts = "-o LogLevel=ERROR"
     
     cmd = f"{prefix}ssh {port_flag} {opts} {shlex.quote(remote_user_host)} {shlex.quote(remote_cmd)}"
     return run_cmd(cmd, explanation=f"Running remote command on {remote_user_host}", dry_run=dry_run)
@@ -570,12 +588,16 @@ def deploy_mikrotik_script(filename: str, lines: List[str], host: str, user: str
     
     rc, _, err = scp_to_remote(filename, remote_user_host, remote_rsc_path, ssh_port=port, password=password, dry_run=dry_run)
     if rc == 0:
-        import_cmd = f"/import file={remote_rsc_path}; /file remove [find name=\"{remote_rsc_path}\"]"
-        rc_run, _, err_run = ssh_run(remote_user_host, import_cmd, ssh_port=port, password=password, dry_run=dry_run)
+        import_cmd = f"/import file-name={remote_rsc_path}; /file remove [find name=\"{remote_rsc_path}\"]"
+        rc_run, out_run, err_run = ssh_run(remote_user_host, import_cmd, ssh_port=port, password=password, dry_run=dry_run)
         if rc_run == 0:
             print(f"  Success: Imported {filename} on {host}")
         else:
-            print(f"  Error running import on Mikrotik: {err_run}")
+            print(f"  Error running import on Mikrotik (RC={rc_run}):")
+            if out_run.strip():
+                print(f"    STDOUT: {out_run.strip()}")
+            if err_run.strip():
+                print(f"    STDERR: {err_run.strip()}")
     else:
         print(f"  Error copying file: {err}")
     
@@ -608,14 +630,13 @@ def process_vlan_mikrotik(vlan: str, dns_entries: List[Dict[str, Any]], firewall
         dns_lines = [
             f"# Generated by update-network-configs.py on {datetime.datetime.now()}",
             f":put \"Starting DNS update for VLAN: {vlan_lower}\"",
-            "/ip dns static",
-            f'remove [find comment="{dns_script_comment}"]',
+            f'/ip dns static remove [find comment="{dns_script_comment}"]',
             ':put "Updating DNS entries..."'
         ]
         
         unique_dns = {e['fqdn']: e['ip'] for e in dns_entries}
         for fqdn, ip in unique_dns.items():
-            cmd = f'add name="{fqdn}" address="{ip}" comment="{dns_script_comment}"'
+            cmd = f'/ip dns static add name="{fqdn}" address="{ip}" comment="{dns_script_comment}"'
             dns_lines.append(cmd)
             
         deploy_mikrotik_script(dns_filename, dns_lines, target_host, ssh_user, ssh_port, password, dry_run, keep_files)
@@ -633,8 +654,7 @@ def process_vlan_mikrotik(vlan: str, dns_entries: List[Dict[str, Any]], firewall
         fw_lines = [
             f"# Generated by update-network-configs.py on {datetime.datetime.now()}",
             f":put \"Starting Firewall update for VLAN: {vlan_lower}\"",
-            "/ip firewall filter",
-            f'remove [find comment="{fw_script_comment}"]',
+            f'/ip firewall filter remove [find comment="{fw_script_comment}"]',
             ':put "Updating Caddy Pinholes..."'
         ]
 
@@ -673,7 +693,7 @@ def process_vlan_mikrotik(vlan: str, dns_entries: List[Dict[str, Any]], firewall
                 if tcp_ports:
                     ports_joined = ','.join(tcp_ports)
                     rule_tcp = (
-                        f'add chain=forward action=accept '
+                        f'/ip firewall filter add chain=forward action=accept '
                         f'src-address={caddy_ip} dst-address={target_ip} '
                         f'protocol=tcp dst-port={ports_joined} '
                         f'place-before=[find comment="Drop invalid/inter-VLAN forward"] '
@@ -686,7 +706,7 @@ def process_vlan_mikrotik(vlan: str, dns_entries: List[Dict[str, Any]], firewall
                 if udp_ports:
                     ports_joined = ','.join(udp_ports)
                     rule_udp = (
-                        f'add chain=forward action=accept '
+                        f'/ip firewall filter add chain=forward action=accept '
                         f'src-address={caddy_ip} dst-address={target_ip} '
                         f'protocol=udp dst-port={ports_joined} '
                         f'place-before=[find comment="Drop invalid/inter-VLAN forward"] '
@@ -710,8 +730,7 @@ def process_vlan_mikrotik(vlan: str, dns_entries: List[Dict[str, Any]], firewall
         nat_lines = [
             f"# Generated by update-network-configs.py on {datetime.datetime.now()}",
             f":put \"Starting NAT update for VLAN: {vlan_lower}\"",
-            "/ip firewall nat",
-            f'remove [find comment="{nat_script_comment}"]',
+            f'/ip firewall nat remove [find comment="{nat_script_comment}"]',
             ':put "Updating NAT rules..."'
         ]
         
@@ -742,7 +761,7 @@ def process_vlan_mikrotik(vlan: str, dns_entries: List[Dict[str, Any]], firewall
 
                     # Generate NAT Rule
                     rule = (
-                        f'add chain=dstnat action=dst-nat '
+                        f'/ip firewall nat add chain=dstnat action=dst-nat '
                         f'to-addresses={target_ip} to-ports={p_num} '
                         f'protocol={p_proto} dst-port={p_num} '
                         f'in-interface={wan_interface} '
@@ -785,7 +804,8 @@ def process_caddyfile(records: List[Dict[str, str]], caddyfile_path: str, dry_ru
     # 1. Find all site blocks and their maps
     # Regex for site block start: start of line, non-whitespace chars (including comma), space, brace
     # We want to capture the domain list.
-    site_start_re = re.compile(r'(?m)^([^\s{]+(?:,\s*[^\s{]+)*)\s+\{')
+    # Ensure we don't match comments (lines starting with #) and don't span multiple lines for domains
+    site_start_re = re.compile(r'(?m)^([^#\s{][^\s{]*(?:[ \t,]+[^\s{]+)*)\s+\{')
     
     blocks = [] # List of dicts: {domains: [], map_match: match_object, start: int, end: int}
     
@@ -807,8 +827,10 @@ def process_caddyfile(records: List[Dict[str, str]], caddyfile_path: str, dry_ru
             # Parse domains
             # Remove *. prefix
             domains = []
-            for d in domain_str.split(','):
+            for d in re.split(r'[ \t,]+', domain_str):
                 d = d.strip()
+                if not d:
+                    continue
                 if d.startswith('*.'):
                     domains.append(d[2:])
                 else:
@@ -931,7 +953,8 @@ def main(argv: List[str]) -> int:
     args = parser.parse_args(argv)
 
     # 1. Load Config
-    config = load_config(args.config)
+    config, loaded_config_path = load_config(args.config)
+    config_dir = os.path.dirname(os.path.abspath(loaded_config_path)) if loaded_config_path else os.getcwd()
     
     if args.dry_run:
         os.makedirs("dry-run", exist_ok=True)
@@ -946,7 +969,14 @@ def main(argv: List[str]) -> int:
     inventory_path, is_temp_file = fetch_inventory_csv(inventory_input)
 
     caddy_ip = args.caddy_ip or config.get('caddy_ip')
-    caddyfile_path = args.caddyfile or config.get('caddyfile', 'Caddyfile')
+    
+    caddyfile_raw = args.caddyfile or config.get('caddyfile', 'Caddyfile')
+    if not os.path.isabs(caddyfile_raw) and not args.caddyfile and loaded_config_path:
+         # If from config, resolve relative to config dir
+         caddyfile_path = os.path.normpath(os.path.join(config_dir, caddyfile_raw))
+    else:
+         caddyfile_path = caddyfile_raw
+
     wan_interface = args.wan_interface or config.get('wan_interface', 'ether1')
     
     # Update global config dict with resolved defaults for passing down
