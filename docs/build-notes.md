@@ -95,31 +95,31 @@ The Firefly III application for personal finance management
 
 The Jellyfin media server for streaming media content
 
-- Installed via [Proxmox Helper Script for ](https://community-scripts.github.io/ProxmoxVE/scripts?id=jellyfin)
+- Installed via [Proxmox Helper Script for Jellyfin](https://community-scripts.github.io/ProxmoxVE/scripts?id=jellyfin)
 
 ## `syncthing`
 
 Syncthing for file synchronization across devices
 
-- Installed via [Proxmox Helper Script for ](https://community-scripts.github.io/ProxmoxVE/scripts?id=)
+- Installed via [Proxmox Helper Script for Syncthing](https://community-scripts.github.io/ProxmoxVE/scripts?id=syncthing)
 
 ## `gitea`
 
 Gitea for self-hosted Git repository management
 
-- Installed via [Proxmox Helper Script for ](https://community-scripts.github.io/ProxmoxVE/scripts?id=gitea)
+- Installed via [Proxmox Helper Script for Gitea](https://community-scripts.github.io/ProxmoxVE/scripts?id=gitea)
 
 ## `vaultwarden`
 
 Vaultwarden for self-hosted password management
 
-- Installed via [Proxmox Helper Script for ](https://community-scripts.github.io/ProxmoxVE/scripts?id=vaultwarden)
+- Installed via [Proxmox Helper Script for Vaultwarden](https://community-scripts.github.io/ProxmoxVE/scripts?id=vaultwarden)
 
 ## `Grafana`
 
 The Grafana application for data visualization and monitoring
 
-- Installed via [Proxmox Helper Script for ](https://community-scripts.github.io/ProxmoxVE/scripts?id=grafana)
+- Installed via [Proxmox Helper Script for Grafana](https://community-scripts.github.io/ProxmoxVE/scripts?id=grafana)
 
 ## `tiny-tiny-rss`
 
@@ -127,4 +127,11 @@ The Tiny Tiny RSS application for RSS feed management
 
 - Installed via [Proxmox Helper Script for Docker LXC](https://community-scripts.github.io/ProxmoxVE/scripts?id=docker&category=Containers+%26+Docker)
 - Dockerfile and configuration managed in the `tt-rss` folder of this repository
+
+## `smtp-relay`
+
+The SMTP relay service for relaying emails from the homelab
+
+- Base OS: Debian 13
+- Container/VM: LXC container via Proxmox
 

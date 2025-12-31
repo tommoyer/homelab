@@ -1,0 +1,75 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_USER=${TTRSS_DB_USER}
+      - POSTGRES_PASSWORD=${TTRSS_DB_PASS}
+      - POSTGRES_DB=${TTRSS_DB_NAME}
+    volumes:
+      - db:/var/lib/postgresql/data
+      # or, if 18+
+      # - db:/var/lib/postgresql
+
+  app:
+    image: supahgreg/tt-rss:latest
+    # or
+    # image: ghcr.io/tt-rss/tt-rss:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - app:/var/www/html
+      - ./config.d:/opt/tt-rss/config.d:ro
+    depends_on:
+      - db
+
+#  optional, makes weekly backups of your install
+#  backups:
+#    image: supahgreg/tt-rss:latest
+#    # or
+#    # image: ghcr.io/tt-rss/tt-rss:latest
+#    restart: unless-stopped
+#    env_file:
+#      - .env
+#    volumes:
+#      - backups:/backups
+#      - app:/var/www/html
+#    depends_on:
+#      - db
+#    command: /opt/tt-rss/dcron.sh -f
+
+  updater:
+    image: supahgreg/tt-rss:latest
+    # or
+    # image: ghcr.io/tt-rss/tt-rss:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - app:/var/www/html
+      - ./config.d:/opt/tt-rss/config.d:ro
+    depends_on:
+      - app
+    command: /opt/tt-rss/updater.sh
+
+  web-nginx:
+    image: supahgreg/tt-rss-web-nginx:latest
+    # or
+    # image: ghcr.io/tt-rss/tt-rss-web-nginx:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - ${HTTP_PORT}:80
+    volumes:
+      - app:/var/www/html:ro
+    depends_on:
+      - app
+
+volumes:
+  db:
+  app:
+  backups:
