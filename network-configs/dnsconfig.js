@@ -45,6 +45,10 @@ for (var i = 0; i < externalData.length; i++) {
 for (var domain in groupedRecords) {
     var recs = groupedRecords[domain];
     D(domain, REG_NONE, DnsProvider(DSP_CF),
-        recs
+        recs,
+        // --- Ignored Records (Managed manually or by other services) ---
+        // Brevo / Sendinblue
+        IGNORE("*", "CNAME"),
+        IGNORE("*", "TXT"),
     );
 }
