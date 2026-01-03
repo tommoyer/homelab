@@ -1,0 +1,208 @@
+---
+- Google:
+  - Gmail:
+    - abbr: GM
+      href: https://mail.google.com
+  - Calendar:
+    - abbr: CA
+      href: https://calendar.google.com/
+  - Drive:
+    - abbr: DR
+      href: https://drive.google.com/
+  - Meet:
+    - abbr: ME
+      href: https://meet.google.com/
+  - News:
+    - abbr: NE
+      href: https://news.google.com
+  - Chat:
+    - abbr: CH
+      href: https://chat.google.com
+  - Gemini:
+    - abbr: GE
+      href: https://gemini.google.com/app
+  - Google Cloud console:
+    - abbr: GC
+      href: https://console.cloud.google.com/welcome/new?project=support-assist-384720
+- Bookmarks:
+  - TickTick:
+    - abbr: TI
+      href: https://ticktick.com
+      description: 'TickTick: Your all-in-one productivity app. Manage tasks, calendars, habits, and more. Sync across all devices. Start for free!'
+  - Amazon:
+    - abbr: AM
+      href: https://www.amazon.com
+  - Bromley Village Resident Portal:
+    - abbr: BV
+      href: https://bromleyvillage.activebuilding.com/login
+  - Dashboard | Whitmore:
+    - abbr: DW
+      href: https://scwhitmore.geniussis.com/FEDashboard.aspx
+  - GitHub:
+    - abbr: GI
+      href: https://github.com
+  - Home Page:
+    - abbr: HP
+      href: https://thomasmoyer.org
+  - K12 PaymentCenter:
+    - abbr: KP
+      href: https://www.k12paymentcenter.com
+      description: Pay school fees, set up autoplay, and customize low-balance notifications from any device with K12PaymentCenter online school payments.
+  - LINQ Connect:
+    - abbr: LC
+      href: https://linqconnect.com
+  - Plan to Eat:
+    - abbr: PT
+      href: https://app.plantoeat.com/planner
+  - Posts | W R Odell Elementary:
+    - abbr: PW
+      href: https://www.parentsquare.com/schools/20915/feeds
+  - Property Meld:
+    - abbr: PM
+      href: https://app.propertymeld.com/641/t/2044970/melds/tickets
+  - Real Property Management:
+    - abbr: RP
+      href: https://rpmnc010.appfolio.com/connect
+  - GitHub Copilot:
+    - abbr: GC
+      href: https://github.com/copilot
+      description: GitHub is where people build software. More than 150 million people use GitHub to discover, fork, and contribute to over 420 million projects.
+  - Teal - Job Tracker:
+    - abbr: TJ
+      href: https://app.tealhq.com/job-tracker
+      description: Enable fulfilling careers.
+  - ChatGPT:
+    - abbr: CH
+      href: https://chatgpt.com
+      description: ChatGPT is a free-to-use AI system. Use it for engaging conversations, gain insights, automate tasks, and witness the future of AI, all in one place.
+- Online Education:
+  - Introduction to Machine Learning:
+    - abbr: IT
+      href: https://sebastianraschka.com/blog/2021/ml-course.html
+  - Introduction to Deep Learning:
+    - abbr: IT
+      href: https://sebastianraschka.com/blog/2021/dl-course.html
+- Entertainment:
+  - Tiny Tiny RSS:
+    - abbr: TT
+      href: https://tt-rss.duckbill-frog.ts.net
+  - Amazon Video:
+    - abbr: AV
+      href: https://www.amazon.com/Amazon-Video/b/ref=topnav_storetab_atv?_encoding=UTF8&node=2858778011
+  - Netflix:
+    - abbr: NE
+      href: https://www.netflix.com
+  - Hulu:
+    - abbr: HU
+      href: https://hulu.com
+  - Vudu - Free:
+    - abbr: VF
+      href: https://www.vudu.com/content/movies/uxpage/View-All-Free-Movies-TV/10
+  - YouTube:
+    - abbr: YO
+      href: http://youtube.com
+  - Plex:
+    - abbr: PL
+      href: https://app.plex.tv/desktop
+  - Twitch:
+    - abbr: TW
+      href: https://www.twitch.tv/
+  - JustWatch:
+    - abbr: JU
+      href: https://www.justwatch.com/us
+  - Steam Deck Emulation Starter Guide – Retro Game Corps:
+    - abbr: SD
+      href: https://retrogamecorps.com/2022/10/16/steam-deck-emulation-starter-guide
+- UNCC:
+  - My Charlotte:
+    - abbr: MC
+      href: https://my.uncc.edu/faculty
+  - Campuswire:
+    - abbr: CA
+      href: https://campuswire.com
+  - Canvas:
+    - abbr: CA
+      href: https://instructure.charlotte.edu
+- TerraBlue AI:
+  - Hostinger:
+    - abbr: HO
+      href: https://www.hostinger.com/
+      description: Choose Hostinger and make the perfect site. From Shared Hosting and Domains to VPS and Cloud plans. We have all you need for online success.
+  - SupportAssist Scorecard:
+    - abbr: SS
+      href: https://lookerstudio.google.com/u/0/reporting/8a005185-cb2d-4002-a0a3-f352e405e9c1/page/p_qcx6hx9dpd
+  - Buddy:
+    - abbr: BU
+      href: https://buddy.works
+      description: DevOps & Platform Engineering Copilot
+  - PlanetScale:
+    - abbr: PL
+      href: https://app.planetscale.com/supportassist
+      description: PlanetScale is the world’s fastest and most reliable OLTP database.
+  - TerraBlue FreeScout:
+    - abbr: TF
+      href: https://terrablue.wpsiteassist.com
+  - SupportAssist - TickTick:
+    - abbr: ST
+      href: https://ticktick.com/webapp/#p/67e4a97f8f086255c4cf665a/kanban/6809022edbe556573ddf61e1
+  - Pinecone:
+    - abbr: PI
+      href: https://www.pinecone.io
+      description: Search through billions of items for similar matches to any object, in milliseconds. It’s the next generation of search, an API call away.
+  - Anthropic Console:
+    - abbr: AC
+      href: https://console.anthropic.com
+      description: Build with the Anthropic API, an AI assistant from Anthropic
+  - Sentry:
+    - abbr: SE
+      href: https://awesome-motive-inc.sentry.io
+- Things for Bad Days:
+  - Simon Sinek Find Your Why:
+    - abbr: SS
+      href: https://www.youtube.com/watch?v=2BH8MtM9Euo
+  - Admiral McRaven Leaves the Audience Speechless:
+    - abbr: AM
+      href: https://www.youtube.com/watch?v=pxBQLFLei70
+  - Rick Rigsby - Wisest Person In My Life:
+    - abbr: RR
+      href: https://www.youtube.com/watch?v=Bg_Q7KYWG1g
+  - Matthew McConaughey Leaves The Audience Speechless:
+    - abbr: MM
+      href: https://www.youtube.com/watch?v=68ZcE5GQP9c
+  - The 13 Truths - Matthew McConaughey:
+    - abbr: T1
+      href: https://www.youtube.com/watch?v=yjr3cuSUs2A
+  - 'Randy Pausch Lecture: Time Management - YouTube':
+    - abbr: RP
+      href: https://www.youtube.com/watch?v=oTugjssqOT0
+  - 'Randy Pausch Last Lecture: Achieving Your Childhood Dreams - YouTube':
+    - abbr: RP
+      href: https://www.youtube.com/watch?v=ji5_MqicxSo
+- Homelab:
+  - Router:
+    - abbr: RO
+      href: http://hexs.moyer.wtf
+  - Switch:
+    - abbr: SW
+      href: http://crs.moyer.wtf
+  - PiHole:
+    - abbr: PI
+      href: http://pihole.duckbill-frog.ts.net/admin/
+  - Portainer:
+    - abbr: PO
+      href: https://portainer.duckbill-frog.ts.net:9443/
+  - Unifi Controller:
+    - abbr: UC
+      href: https://unifi.moyer.wtf:8443/
+  - PiKVM:
+    - abbr: PI
+      href: https://pikvm.moyer.wtf/
+  - Tailscale:
+    - abbr: TA
+      href: https://login.tailscale.com/admin/machines
+  - Cloudflare:
+    - abbr: CL
+      href: https://dash.cloudflare.com
+  - Travel Router:
+    - abbr: TR
+      href: http://192.168.8.1
