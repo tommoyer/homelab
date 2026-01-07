@@ -1,0 +1,71 @@
+schema_version: 1
+
+globals:
+  base_domain: "moyer.wtf"
+  user_vlan: "hivemind"         # mirrors dns-config.toml user_vlan:contentReference[oaicite:3]{index=3}
+  access_publish_to_user_vlan: true
+  caddy_ip: "192.168.20.3"      # mirrors dns-config.toml caddy_ip:contentReference[oaicite:4]{index=4}
+
+vlans:
+  - vlan_id: "hivemind"         # canonical key used everywhere
+    vlan_tag: 1                # optional numeric VLAN ID
+    cidr: "192.168.1.0/24"     # optional, used for validation/reporting
+    dns:
+      default_provider: "pihole"        # pihole|mikrotik
+      include_access_fqdn: true         # mirrors include_access_fqdn:contentReference[oaicite:5]{index=5}
+    suffixes:
+      infra: "hivemind.moyer.wtf"       # where infra names live
+      access: "moyer.wtf"               # where access names live
+    servers:
+      dns_host: "192.168.1.4"           # Pi-hole/Mikrotik host for this VLAN
+      dns_type: "pihole"                # pihole|mikrotik (like dns-config.toml servers.<vlan>.type):contentReference[oaicite:6]{index=6}
+      ssh_user: "tom-tom"
+      ssh_port: 22
+      use_sudo: true
+    
+  - vlan_id: "homelab"         # canonical key used everywhere
+    vlan_tag: 10                # optional numeric VLAN ID
+    cidr: "192.168.10.0/24"     # optional, used for validation/reporting
+    dns:
+      default_provider: "pihole"        # pihole|mikrotik
+      include_access_fqdn: true         # mirrors include_access_fqdn:contentReference[oaicite:5]{index=5}
+    suffixes:
+      infra: "homelab.moyer.wtf"       # where infra names live
+      access: "moyer.wtf"               # where access names live
+    servers:
+      dns_host: "192.168.10.27"           # Pi-hole/Mikrotik host for this VLAN
+      dns_type: "pihole"                # pihole|mikrotik (like dns-config.toml servers.<vlan>.type):contentReference[oaicite:6]{index=6}
+      ssh_user: "root"
+      ssh_port: 22
+      use_sudo: false
+
+  - vlan_id: "dmz"         # canonical key used everywhere
+    vlan_tag: 20                # optional numeric VLAN ID
+    cidr: "192.168.20.0/24"     # optional, used for validation/reporting
+    dns:
+      default_provider: "pihole"        # pihole|mikrotik
+      include_access_fqdn: true         # mirrors include_access_fqdn:contentReference[oaicite:5]{index=5}
+    suffixes:
+      infra: "dmz.moyer.wtf"       # where infra names live
+      access: "moyer.wtf"               # where access names live
+    servers:
+      dns_host: "192.168.20.2"           # Pi-hole/Mikrotik host for this VLAN
+      dns_type: "pihole"                # pihole|mikrotik (like dns-config.toml servers.<vlan>.type):contentReference[oaicite:6]{index=6}
+      ssh_user: "root"
+      ssh_port: 22
+      use_sudo: false
+      
+  - vlan_id: "shady"
+    vlan_tag: 30
+    dns:
+      default_provider: "mikrotik"
+      include_access_fqdn: false
+    suffixes:
+      infra: "shady.moyer.wtf"
+      access: "moyer.wtf"
+    servers:
+      dns_host: "192.168.30.1"
+      dns_type: "mikrotik"
+      ssh_user: "admin"
+      ssh_port: 22
+      use_sudo: false

@@ -1,0 +1,149 @@
+version: "3"
+
+# Taskfile.yaml
+#
+# Usage examples:
+#   task all
+#   task all -- DRY_RUN=true
+#   task pihole -- VLANS=homelab,shady
+#   task mikrotik:dns -- DRY_RUN=true
+#   task cloudflare -- DRY_RUN=false
+#   task caddy:map -- CADDYFILE=./Caddyfile
+#
+# Notes:
+# - Scripts are expected at:
+#     netops/apply_pihole.py
+#     netops/apply_mikrotik_dns.py
+#     netops/apply_mikrotik_fw_nat.py
+#     netops/apply_cloudflare_dnscontrol.py
+#     netops/update_caddyfile_map.py
+# - Optional: put CLOUDFLARE_API_TOKEN in your environment (or a .env file).
+
+dotenv:
+  - .env
+
+vars:
+  PYTHON: python3
+  DATA_DIR: data
+  CONFIG: dns-config.toml
+
+  # Common toggles (set via CLI: task all -- DRY_RUN=true)
+  DRY_RUN: "false"
+  KEEP: "false"
+
+  # Comma-separated VLAN filter for scripts that support it (e.g. "homelab,shady")
+  VLANS: ""
+
+  # Pi-hole specifics
+  PIHOLE_BACKUP: "false"
+  PIHOLE_RELOAD_CMD: ""
+
+  # Mikrotik specifics (optional overrides; otherwise read from dns-config.toml)
+  ROUTER_HOST: ""
+  ROUTER_USER: ""
+  ROUTER_PORT: ""
+  ROUTER_PASSWORD: ""
+  WAN_INTERFACE: ""
+  CADDY_IP: ""
+  PLACE_BEFORE_COMMENT: "Drop invalid/inter-VLAN forward"
+
+  # Caddy specifics
+  CADDYFILE: Caddyfile
+
+tasks:
+  default:
+    deps: [all]
+
+  preflight:
+    desc: "Basic dependency checks (python + optional dnscontrol)"
+    cmds:
+      - "{{.PYTHON}} --version"
+      - "command -v ssh >/dev/null"
+      - "command -v scp >/dev/null"
+      - |
+        if [ "{{.DRY_RUN}}" != "true" ]; then
+          command -v dnscontrol >/dev/null || echo "dnscontrol not found (required for cloudflare task)"
+        fi
+
+  pihole:
+    desc: "Apply internal DNS records to Pi-hole servers"
+    cmds:
+      - |
+        {{.PYTHON}} netops/apply_pihole.py \
+          --data-dir {{.DATA_DIR}} \
+          --config {{.CONFIG}} \
+          {{if eq .DRY_RUN "true"}}--dry-run{{end}} \
+          {{if eq .KEEP "true"}}--keep{{end}} \
+          {{if eq .PIHOLE_BACKUP "true"}}--backup{{end}} \
+          {{if .PIHOLE_RELOAD_CMD}}--reload-cmd "{{.PIHOLE_RELOAD_CMD}}"{{end}} \
+          {{range $v := splitList "," .VLANS}}{{if $v}}--vlan {{$v}}{{end}} {{end}}
+
+  mikrotik:dns:
+    desc: "Apply internal DNS records to Mikrotik (/ip dns static)"
+    cmds:
+      - |
+        {{.PYTHON}} netops/apply_mikrotik_dns.py \
+          --data-dir {{.DATA_DIR}} \
+          --config {{.CONFIG}} \
+          {{if eq .DRY_RUN "true"}}--dry-run{{end}} \
+          {{if eq .KEEP "true"}}--keep{{end}} \
+          {{if .ROUTER_HOST}}--router-host "{{.ROUTER_HOST}}"{{end}} \
+          {{if .ROUTER_USER}}--router-user "{{.ROUTER_USER}}"{{end}} \
+          {{if .ROUTER_PORT}}--router-port "{{.ROUTER_PORT}}"{{end}} \
+          {{if .ROUTER_PASSWORD}}--router-password "{{.ROUTER_PASSWORD}}"{{end}} \
+          {{range $v := splitList "," .VLANS}}{{if $v}}--vlan {{$v}}{{end}} {{end}}
+
+  mikrotik:fw_nat:
+    desc: "Apply Mikrotik firewall pinholes + dstnat rules from services.yaml"
+    cmds:
+      - |
+        {{.PYTHON}} netops/apply_mikrotik_fw_nat.py \
+          --data-dir {{.DATA_DIR}} \
+          --config {{.CONFIG}} \
+          {{if eq .DRY_RUN "true"}}--dry-run{{end}} \
+          {{if eq .KEEP "true"}}--keep{{end}} \
+          {{if .ROUTER_HOST}}--router-host "{{.ROUTER_HOST}}"{{end}} \
+          {{if .ROUTER_USER}}--router-user "{{.ROUTER_USER}}"{{end}} \
+          {{if .ROUTER_PORT}}--router-port "{{.ROUTER_PORT}}"{{end}} \
+          {{if .ROUTER_PASSWORD}}--router-password "{{.ROUTER_PASSWORD}}"{{end}} \
+          {{if .WAN_INTERFACE}}--wan-interface "{{.WAN_INTERFACE}}"{{end}} \
+          {{if .CADDY_IP}}--caddy-ip "{{.CADDY_IP}}"{{end}} \
+          {{if .PLACE_BEFORE_COMMENT}}--place-before-comment "{{.PLACE_BEFORE_COMMENT}}"{{end}} \
+          {{range $v := splitList "," .VLANS}}{{if $v}}--vlan {{$v}}{{end}} {{end}}
+
+  cloudflare:
+    desc: "Generate external_records.json and apply Cloudflare changes via DNSControl"
+    cmds:
+      - |
+        {{.PYTHON}} netops/apply_cloudflare_dnscontrol.py \
+          --data-dir {{.DATA_DIR}} \
+          {{if eq .DRY_RUN "true"}}--dry-run{{end}} \
+          {{if eq .KEEP "true"}}--keep{{end}}
+
+  caddy:map:
+    desc: "Update Caddyfile map {host} {backend} from YAML SoT"
+    cmds:
+      - |
+        {{.PYTHON}} netops/update_caddyfile_map.py \
+          --data-dir {{.DATA_DIR}} \
+          --config {{.CONFIG}} \
+          --caddyfile "{{.CADDYFILE}}" \
+          {{if eq .DRY_RUN "true"}}--dry-run{{end}} \
+          {{if .CADDY_IP}}--caddy-ip "{{.CADDY_IP}}"{{end}}
+
+  # Run everything (order is intentional: DNS first, router rules, then Cloudflare and Caddyfile update)
+  all:
+    desc: "Run all apply steps"
+    deps:
+      - pihole
+      - mikrotik:dns
+      - mikrotik:fw_nat
+      - cloudflare
+      - caddy:map
+
+  all:dry-run:
+    desc: "Dry-run of all apply steps"
+    cmds:
+      - task: all
+        vars:
+          DRY_RUN: "true"
