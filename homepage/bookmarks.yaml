@@ -3,206 +3,637 @@
   - Gmail:
     - abbr: GM
       href: https://mail.google.com
+      icon: https://mail.google.com/favicon.ico
   - Calendar:
     - abbr: CA
       href: https://calendar.google.com/
+      icon: https://calendar.google.com/favicon.ico
   - Drive:
     - abbr: DR
       href: https://drive.google.com/
+      icon: https://drive.google.com/favicon.ico
   - Meet:
     - abbr: ME
       href: https://meet.google.com/
+      icon: https://meet.google.com/favicon.ico
   - News:
     - abbr: NE
       href: https://news.google.com
+      icon: https://news.google.com/favicon.ico
   - Chat:
     - abbr: CH
       href: https://chat.google.com
+      icon: https://chat.google.com/favicon.ico
   - Gemini:
     - abbr: GE
       href: https://gemini.google.com/app
+      icon: https://gemini.google.com/app/favicon.ico
   - Google Cloud console:
     - abbr: GC
       href: https://console.cloud.google.com/welcome/new?project=support-assist-384720
+      icon: https://console.cloud.google.com/welcome/new?project=support-assist-384720/favicon.ico
 - Bookmarks:
   - TickTick:
     - abbr: TI
       href: https://ticktick.com
-      description: 'TickTick: Your all-in-one productivity app. Manage tasks, calendars, habits, and more. Sync across all devices. Start for free!'
+      description: 'TickTick: Your all-in-one productivity app. Manage tasks, calendars,
+        habits, and more. Sync across all devices. Start for free!'
+      icon: https://ticktick.com/favicon.ico
   - Amazon:
     - abbr: AM
       href: https://www.amazon.com
+      icon: https://www.amazon.com/favicon.ico
   - Bromley Village Resident Portal:
     - abbr: BV
       href: https://bromleyvillage.activebuilding.com/login
+      icon: https://bromleyvillage.activebuilding.com/login/favicon.ico
   - Dashboard | Whitmore:
     - abbr: DW
       href: https://scwhitmore.geniussis.com/FEDashboard.aspx
+      icon: https://scwhitmore.geniussis.com/FEDashboard.aspx/favicon.ico
   - GitHub:
     - abbr: GI
       href: https://github.com
+      icon: https://github.com/favicon.ico
   - Home Page:
     - abbr: HP
       href: https://thomasmoyer.org
+      icon: https://thomasmoyer.org/favicon.ico
   - K12 PaymentCenter:
     - abbr: KP
       href: https://www.k12paymentcenter.com
-      description: Pay school fees, set up autoplay, and customize low-balance notifications from any device with K12PaymentCenter online school payments.
+      description: Pay school fees, set up autoplay, and customize low-balance notifications
+        from any device with K12PaymentCenter online school payments.
+      icon: https://www.k12paymentcenter.com/favicon.ico
   - LINQ Connect:
     - abbr: LC
       href: https://linqconnect.com
+      icon: https://linqconnect.com/favicon.ico
   - Plan to Eat:
     - abbr: PT
       href: https://app.plantoeat.com/planner
+      icon: https://app.plantoeat.com/planner/favicon.ico
   - Posts | W R Odell Elementary:
     - abbr: PW
       href: https://www.parentsquare.com/schools/20915/feeds
+      icon: https://www.parentsquare.com/schools/20915/feeds/favicon.ico
   - Property Meld:
     - abbr: PM
       href: https://app.propertymeld.com/641/t/2044970/melds/tickets
+      icon: https://app.propertymeld.com/641/t/2044970/melds/tickets/favicon.ico
   - Real Property Management:
     - abbr: RP
       href: https://rpmnc010.appfolio.com/connect
+      icon: https://rpmnc010.appfolio.com/connect/favicon.ico
   - GitHub Copilot:
     - abbr: GC
       href: https://github.com/copilot
-      description: GitHub is where people build software. More than 150 million people use GitHub to discover, fork, and contribute to over 420 million projects.
+      description: GitHub is where people build software. More than 150 million people
+        use GitHub to discover, fork, and contribute to over 420 million projects.
+      icon: https://github.com/copilot/favicon.ico
   - Teal - Job Tracker:
     - abbr: TJ
       href: https://app.tealhq.com/job-tracker
       description: Enable fulfilling careers.
+      icon: https://app.tealhq.com/job-tracker/favicon.ico
   - ChatGPT:
     - abbr: CH
       href: https://chatgpt.com
-      description: ChatGPT is a free-to-use AI system. Use it for engaging conversations, gain insights, automate tasks, and witness the future of AI, all in one place.
+      description: ChatGPT is a free-to-use AI system. Use it for engaging conversations,
+        gain insights, automate tasks, and witness the future of AI, all in one place.
+      icon: https://chatgpt.com/favicon.ico
 - Online Education:
   - Introduction to Machine Learning:
     - abbr: IT
       href: https://sebastianraschka.com/blog/2021/ml-course.html
+      icon: https://sebastianraschka.com/blog/2021/ml-course.html/favicon.ico
   - Introduction to Deep Learning:
     - abbr: IT
       href: https://sebastianraschka.com/blog/2021/dl-course.html
+      icon: https://sebastianraschka.com/blog/2021/dl-course.html/favicon.ico
 - Entertainment:
   - Tiny Tiny RSS:
     - abbr: TT
       href: https://tt-rss.duckbill-frog.ts.net
+      icon: https://tt-rss.duckbill-frog.ts.net/favicon.ico
   - Amazon Video:
     - abbr: AV
       href: https://www.amazon.com/Amazon-Video/b/ref=topnav_storetab_atv?_encoding=UTF8&node=2858778011
+      icon: https://www.amazon.com/Amazon-Video/b/ref=topnav_storetab_atv?_encoding=UTF8&node=2858778011/favicon.ico
   - Netflix:
     - abbr: NE
       href: https://www.netflix.com
+      icon: https://www.netflix.com/favicon.ico
   - Hulu:
     - abbr: HU
       href: https://hulu.com
+      icon: https://hulu.com/favicon.ico
   - Vudu - Free:
     - abbr: VF
       href: https://www.vudu.com/content/movies/uxpage/View-All-Free-Movies-TV/10
+      icon: https://www.vudu.com/content/movies/uxpage/View-All-Free-Movies-TV/10/favicon.ico
   - YouTube:
     - abbr: YO
       href: http://youtube.com
+      icon: http://youtube.com/favicon.ico
   - Plex:
     - abbr: PL
       href: https://app.plex.tv/desktop
+      icon: https://app.plex.tv/desktop/favicon.ico
   - Twitch:
     - abbr: TW
       href: https://www.twitch.tv/
+      icon: https://www.twitch.tv/favicon.ico
   - JustWatch:
     - abbr: JU
       href: https://www.justwatch.com/us
-  - Steam Deck Emulation Starter Guide – Retro Game Corps:
+      icon: https://www.justwatch.com/us/favicon.ico
+  - "Steam Deck Emulation Starter Guide \u2013 Retro Game Corps":
     - abbr: SD
       href: https://retrogamecorps.com/2022/10/16/steam-deck-emulation-starter-guide
+      icon: https://retrogamecorps.com/2022/10/16/steam-deck-emulation-starter-guide/favicon.ico
 - UNCC:
   - My Charlotte:
     - abbr: MC
       href: https://my.uncc.edu/faculty
+      icon: https://my.uncc.edu/faculty/favicon.ico
   - Campuswire:
     - abbr: CA
       href: https://campuswire.com
+      icon: https://campuswire.com/favicon.ico
   - Canvas:
     - abbr: CA
       href: https://instructure.charlotte.edu
+      icon: https://instructure.charlotte.edu/favicon.ico
 - TerraBlue AI:
   - Hostinger:
     - abbr: HO
       href: https://www.hostinger.com/
-      description: Choose Hostinger and make the perfect site. From Shared Hosting and Domains to VPS and Cloud plans. We have all you need for online success.
+      description: Choose Hostinger and make the perfect site. From Shared Hosting
+        and Domains to VPS and Cloud plans. We have all you need for online success.
+      icon: https://www.hostinger.com/favicon.ico
   - SupportAssist Scorecard:
     - abbr: SS
       href: https://lookerstudio.google.com/u/0/reporting/8a005185-cb2d-4002-a0a3-f352e405e9c1/page/p_qcx6hx9dpd
+      icon: https://lookerstudio.google.com/u/0/reporting/8a005185-cb2d-4002-a0a3-f352e405e9c1/page/p_qcx6hx9dpd/favicon.ico
   - Buddy:
     - abbr: BU
       href: https://buddy.works
       description: DevOps & Platform Engineering Copilot
+      icon: https://buddy.works/favicon.ico
   - PlanetScale:
     - abbr: PL
       href: https://app.planetscale.com/supportassist
-      description: PlanetScale is the world’s fastest and most reliable OLTP database.
+      description: "PlanetScale is the world\u2019s fastest and most reliable OLTP\
+        \ database."
+      icon: https://app.planetscale.com/supportassist/favicon.ico
   - TerraBlue FreeScout:
     - abbr: TF
       href: https://terrablue.wpsiteassist.com
+      icon: https://terrablue.wpsiteassist.com/favicon.ico
   - SupportAssist - TickTick:
     - abbr: ST
       href: https://ticktick.com/webapp/#p/67e4a97f8f086255c4cf665a/kanban/6809022edbe556573ddf61e1
+      icon: https://ticktick.com/webapp/#p/67e4a97f8f086255c4cf665a/kanban/6809022edbe556573ddf61e1/favicon.ico
   - Pinecone:
     - abbr: PI
       href: https://www.pinecone.io
-      description: Search through billions of items for similar matches to any object, in milliseconds. It’s the next generation of search, an API call away.
+      description: "Search through billions of items for similar matches to any object,\
+        \ in milliseconds. It\u2019s the next generation of search, an API call away."
+      icon: https://www.pinecone.io/favicon.ico
   - Anthropic Console:
     - abbr: AC
       href: https://console.anthropic.com
       description: Build with the Anthropic API, an AI assistant from Anthropic
+      icon: https://console.anthropic.com/favicon.ico
   - Sentry:
     - abbr: SE
       href: https://awesome-motive-inc.sentry.io
+      icon: https://awesome-motive-inc.sentry.io/favicon.ico
 - Things for Bad Days:
   - Simon Sinek Find Your Why:
     - abbr: SS
       href: https://www.youtube.com/watch?v=2BH8MtM9Euo
+      icon: https://www.youtube.com/watch?v=2BH8MtM9Euo/favicon.ico
   - Admiral McRaven Leaves the Audience Speechless:
     - abbr: AM
       href: https://www.youtube.com/watch?v=pxBQLFLei70
+      icon: https://www.youtube.com/watch?v=pxBQLFLei70/favicon.ico
   - Rick Rigsby - Wisest Person In My Life:
     - abbr: RR
       href: https://www.youtube.com/watch?v=Bg_Q7KYWG1g
+      icon: https://www.youtube.com/watch?v=Bg_Q7KYWG1g/favicon.ico
   - Matthew McConaughey Leaves The Audience Speechless:
     - abbr: MM
       href: https://www.youtube.com/watch?v=68ZcE5GQP9c
+      icon: https://www.youtube.com/watch?v=68ZcE5GQP9c/favicon.ico
   - The 13 Truths - Matthew McConaughey:
     - abbr: T1
       href: https://www.youtube.com/watch?v=yjr3cuSUs2A
+      icon: https://www.youtube.com/watch?v=yjr3cuSUs2A/favicon.ico
   - 'Randy Pausch Lecture: Time Management - YouTube':
     - abbr: RP
       href: https://www.youtube.com/watch?v=oTugjssqOT0
+      icon: https://www.youtube.com/watch?v=oTugjssqOT0/favicon.ico
   - 'Randy Pausch Last Lecture: Achieving Your Childhood Dreams - YouTube':
     - abbr: RP
       href: https://www.youtube.com/watch?v=ji5_MqicxSo
+      icon: https://www.youtube.com/watch?v=ji5_MqicxSo/favicon.ico
 - Homelab:
   - Router:
     - abbr: RO
       href: http://hexs.moyer.wtf
+      icon: http://hexs.moyer.wtf/favicon.ico
   - Switch:
     - abbr: SW
       href: http://crs.moyer.wtf
+      icon: http://crs.moyer.wtf/favicon.ico
   - PiHole:
     - abbr: PI
       href: http://pihole.duckbill-frog.ts.net/admin/
+      icon: http://pihole.duckbill-frog.ts.net/admin/favicon.ico
   - Portainer:
     - abbr: PO
       href: https://portainer.duckbill-frog.ts.net:9443/
+      icon: https://portainer.duckbill-frog.ts.net:9443/favicon.ico
   - Unifi Controller:
     - abbr: UC
       href: https://unifi.moyer.wtf:8443/
+      icon: https://unifi.moyer.wtf:8443/favicon.ico
   - PiKVM:
     - abbr: PI
       href: https://pikvm.moyer.wtf/
+      icon: https://pikvm.moyer.wtf/favicon.ico
   - Tailscale:
     - abbr: TA
       href: https://login.tailscale.com/admin/machines
+      icon: https://login.tailscale.com/admin/machines/favicon.ico
   - Cloudflare:
     - abbr: CL
       href: https://dash.cloudflare.com
+      icon: https://dash.cloudflare.com/favicon.ico
   - Travel Router:
     - abbr: TR
       href: http://192.168.8.1
+      icon: http://192.168.8.1/favicon.ico
+- Systems:
+  - hEX S:
+    - abbr: HS
+      href: http://hexs.moyer.wtf
+      description: hEX S
+      icon: http://hexs.moyer.wtf/favicon.ico
+  - CRS:
+    - abbr: CR
+      href: https://crs-0.moyer.wtf
+      description: CRS
+      icon: https://crs-0.moyer.wtf/favicon.ico
+  - Unifi U6+:
+    - abbr: UU
+      href: https://uap-0.moyer.wtf
+      description: Unifi U6+
+      icon: https://uap-0.moyer.wtf/favicon.ico
+  - PiHole:
+    - abbr: PI
+      href: https://pihole.moyer.wtf
+      description: PiHole
+      icon: https://pihole.moyer.wtf/favicon.ico
+  - cAP AX:
+    - abbr: CA
+      href: https://capax.moyer.wtf
+      description: cAP AX
+      icon: https://capax.moyer.wtf/favicon.ico
+  - Liam's NUC:
+    - abbr: LS
+      href: https://liam-pc.moyer.wtf
+      description: Liam's NUC
+      icon: https://liam-pc.moyer.wtf/favicon.ico
+  - Liam's Tablet:
+    - abbr: LS
+      href: https://liam-tablet.moyer.wtf
+      description: Liam's Tablet
+      icon: https://liam-tablet.moyer.wtf/favicon.ico
+  - Liam's Xbox:
+    - abbr: LS
+      href: https://liam-xbox.moyer.wtf
+      description: Liam's Xbox
+      icon: https://liam-xbox.moyer.wtf/favicon.ico
+  - Liam's Chromebook:
+    - abbr: LS
+      href: https://liam-chromebook.moyer.wtf
+      description: Liam's Chromebook
+      icon: https://liam-chromebook.moyer.wtf/favicon.ico
+  - Harrison's Desktop:
+    - abbr: HS
+      href: https://harrison-pc.moyer.wtf
+      description: Harrison's Desktop
+      icon: https://harrison-pc.moyer.wtf/favicon.ico
+  - Harrison's Tablet:
+    - abbr: HS
+      href: https://harrison-tablet.moyer.wtf
+      description: Harrison's Tablet
+      icon: https://harrison-tablet.moyer.wtf/favicon.ico
+  - Harrison's Phone:
+    - abbr: HS
+      href: https://harrison-phone.moyer.wtf
+      description: Harrison's Phone
+      icon: https://harrison-phone.moyer.wtf/favicon.ico
+  - Ella's NUC:
+    - abbr: ES
+      href: https://ella-pc.moyer.wtf
+      description: Ella's NUC
+      icon: https://ella-pc.moyer.wtf/favicon.ico
+  - Ella's Tablet:
+    - abbr: ES
+      href: https://ella-tablet.moyer.wtf
+      description: Ella's Tablet
+      icon: https://ella-tablet.moyer.wtf/favicon.ico
+  - Tom's Switch:
+    - abbr: TS
+      href: https://tom-switch.moyer.wtf
+      description: Tom's Switch
+      icon: https://tom-switch.moyer.wtf/favicon.ico
+  - Tom's SteamDeck:
+    - abbr: TS
+      href: https://tom-steamdeck.moyer.wtf
+      description: Tom's SteamDeck
+      icon: https://tom-steamdeck.moyer.wtf/favicon.ico
+  - Tom's Phone:
+    - abbr: TS
+      href: https://tom-phone.moyer.wtf
+      description: Tom's Phone
+      icon: https://tom-phone.moyer.wtf/favicon.ico
+  - Tom's Watch:
+    - abbr: TS
+      href: https://tom-watch.moyer.wtf
+      description: Tom's Watch
+      icon: https://tom-watch.moyer.wtf/favicon.ico
+  - Tom's Tablet:
+    - abbr: TS
+      href: https://tom-tablet.moyer.wtf
+      description: Tom's Tablet
+      icon: https://tom-tablet.moyer.wtf/favicon.ico
+  - Tom's Laptop:
+    - abbr: TS
+      href: https://laptop.moyer.wtf
+      description: Tom's Laptop
+      icon: https://laptop.moyer.wtf/favicon.ico
+  - Stacey's Laptop (Air):
+    - abbr: SS
+      href: https://stacey-air.moyer.wtf
+      description: Stacey's Laptop (Air)
+      icon: https://stacey-air.moyer.wtf/favicon.ico
+  - Stacey's Laptop (MBP):
+    - abbr: SS
+      href: https://stacey-mbp.moyer.wtf
+      description: Stacey's Laptop (MBP)
+      icon: https://stacey-mbp.moyer.wtf/favicon.ico
+  - Stacey's Laptop (Dell):
+    - abbr: SS
+      href: https://stacey-dell.moyer.wtf
+      description: Stacey's Laptop (Dell)
+      icon: https://stacey-dell.moyer.wtf/favicon.ico
+  - Stacey's Tablet:
+    - abbr: SS
+      href: https://stacey-tablet.moyer.wtf
+      description: Stacey's Tablet
+      icon: https://stacey-tablet.moyer.wtf/favicon.ico
+  - Stacey's Phone:
+    - abbr: SS
+      href: https://stacey-phone.moyer.wtf
+      description: Stacey's Phone
+      icon: https://stacey-phone.moyer.wtf/favicon.ico
+  - Stacey's Watch:
+    - abbr: SS
+      href: https://stacey-watch.moyer.wtf
+      description: Stacey's Watch
+      icon: https://stacey-watch.moyer.wtf/favicon.ico
+  - Tori's SteamDeck:
+    - abbr: TS
+      href: https://tori-steamdeck.moyer.wtf
+      description: Tori's SteamDeck
+      icon: https://tori-steamdeck.moyer.wtf/favicon.ico
+  - Tori's Phone:
+    - abbr: TS
+      href: https://tori-phone.moyer.wtf
+      description: Tori's Phone
+      icon: https://tori-phone.moyer.wtf/favicon.ico
+  - Tori's TV:
+    - abbr: TS
+      href: https://tori-tv.moyer.wtf
+      description: Tori's TV
+      icon: https://tori-tv.moyer.wtf/favicon.ico
+  - Tori's Laptop:
+    - abbr: TS
+      href: https://tori-laptop.moyer.wtf
+      description: Tori's Laptop
+      icon: https://tori-laptop.moyer.wtf/favicon.ico
+  - meer5-0:
+    - abbr: M0
+      href: https://meer5-0.moyer.wtf
+      description: meer5-0
+      icon: https://meer5-0.moyer.wtf/favicon.ico
+  - meer8-0:
+    - abbr: M0
+      href: https://meer8-0.moyer.wtf
+      description: meer8-0
+      icon: https://meer8-0.moyer.wtf/favicon.ico
+  - meer8-1:
+    - abbr: M1
+      href: https://meer8-1.moyer.wtf
+      description: meer8-1
+      icon: https://meer8-1.moyer.wtf/favicon.ico
+  - meer8-2:
+    - abbr: M2
+      href: https://meer8-2.moyer.wtf
+      description: meer8-2
+      icon: https://meer8-2.moyer.wtf/favicon.ico
+  - desktop-0:
+    - abbr: D0
+      href: https://desktop-0.moyer.wtf
+      description: desktop-0
+      icon: https://desktop-0.moyer.wtf/favicon.ico
+  - TB-NAS:
+    - abbr: TN
+      href: https://tb-nas.moyer.wtf
+      description: TB-NAS
+      icon: https://tb-nas.moyer.wtf/favicon.ico
+  - Tandoor:
+    - abbr: TA
+      href: https://cookbook.moyer.wtf
+      description: Tandoor
+      icon: https://cookbook.moyer.wtf/favicon.ico
+  - Firefly III:
+    - abbr: FI
+      href: https://ledger.moyer.wtf
+      description: Firefly III
+      icon: https://ledger.moyer.wtf/favicon.ico
+  - Minecraft:
+    - abbr: MI
+      href: https://minecraft.moyer.wtf
+      description: Minecraft
+      icon: https://minecraft.moyer.wtf/favicon.ico
+  - Jellyfin:
+    - abbr: JE
+      href: https://media.moyer.wtf
+      description: Jellyfin
+      icon: https://media.moyer.wtf/favicon.ico
+  - Syncthing:
+    - abbr: SY
+      href: https://sync.moyer.wtf
+      description: Syncthing
+      icon: https://sync.moyer.wtf/favicon.ico
+  - Gitea:
+    - abbr: GI
+      href: https://git.moyer.wtf
+      description: Gitea
+      icon: https://git.moyer.wtf/favicon.ico
+  - Gitea (SSH):
+    - abbr: GS
+      href: https://git-ssh.moyer.wtf
+      description: Gitea (SSH)
+      icon: https://git-ssh.moyer.wtf/favicon.ico
+  - Tiny Tiny RSS:
+    - abbr: TT
+      href: https://news.moyer.wtf
+      description: Tiny Tiny RSS
+      icon: https://news.moyer.wtf/favicon.ico
+  - Website:
+    - abbr: WE
+      href: https://www.thomasmoyer.org
+      description: Website
+      icon: https://www.thomasmoyer.org/favicon.ico
+  - Website:
+    - abbr: WE
+      href: https://thomasmoyer.org
+      description: Website
+      icon: https://thomasmoyer.org/favicon.ico
+  - Vaultwarden:
+    - abbr: VA
+      href: https://vault.moyer.wtf
+      description: Vaultwarden
+      icon: https://vault.moyer.wtf/favicon.ico
+  - Homepage:
+    - abbr: HO
+      href: https://home.moyer.wtf
+      description: Homepage
+      icon: https://home.moyer.wtf/favicon.ico
+  - SMTP Relay:
+    - abbr: SR
+      href: https://smtp-relay.moyer.wtf
+      description: SMTP Relay
+      icon: https://smtp-relay.moyer.wtf/favicon.ico
+  - Uptime Kuma:
+    - abbr: UK
+      href: https://kuma.moyer.wtf
+      description: Uptime Kuma
+      icon: https://kuma.moyer.wtf/favicon.ico
+  - Grafana:
+    - abbr: GR
+      href: https://grafana.moyer.wtf
+      description: Grafana
+      icon: https://grafana.moyer.wtf/favicon.ico
+  - T*warrior Sync:
+    - abbr: TW
+      href: https://tw-sync.moyer.wtf
+      description: T*warrior Sync
+      icon: https://tw-sync.moyer.wtf/favicon.ico
+  - Unifi Controller:
+    - abbr: UC
+      href: https://unifi.moyer.wtf:8443/
+      description: Unifi Controller
+      icon: https://unifi.moyer.wtf:8443/favicon.ico
+  - Pihole (Homelab):
+    - abbr: PH
+      href: https://pihole-lab.moyer.wtf
+      description: Pihole (Homelab)
+      icon: https://pihole-lab.moyer.wtf/favicon.ico
+  - Multicast Relay:
+    - abbr: MR
+      href: https://multicast-relay.moyer.wtf
+      description: Multicast Relay
+      icon: https://multicast-relay.moyer.wtf/favicon.ico
+  - Proxmox Proxy:
+    - abbr: PP
+      href: https://proxmox.moyer.wtf
+      description: Proxmox Proxy
+      icon: https://proxmox.moyer.wtf/favicon.ico
+  - Multicast Relay:
+    - abbr: MR
+      href: https://multicast-relay.moyer.wtf
+      description: Multicast Relay
+      icon: https://multicast-relay.moyer.wtf/favicon.ico
+  - Pihole (DMZ):
+    - abbr: PD
+      href: https://pihole-dmz.moyer.wtf
+      description: Pihole (DMZ)
+      icon: https://pihole-dmz.moyer.wtf/favicon.ico
+  - Caddy:
+    - abbr: CA
+      href: https://proxy.moyer.wtf
+      description: Caddy
+      icon: https://proxy.moyer.wtf/favicon.ico
+  - Color Printer:
+    - abbr: CP
+      href: https://color-printer.moyer.wtf
+      description: Color Printer
+      icon: https://color-printer.moyer.wtf/favicon.ico
+  - meer8-0 plug:
+    - abbr: M0
+      href: https://meer8-0-plug.moyer.wtf
+      description: meer8-0 plug
+      icon: https://meer8-0-plug.moyer.wtf/favicon.ico
+  - meer8-1 plug:
+    - abbr: M1
+      href: https://meer8-1-plug.moyer.wtf
+      description: meer8-1 plug
+      icon: https://meer8-1-plug.moyer.wtf/favicon.ico
+  - meer8-2 plug:
+    - abbr: M2
+      href: https://meer8-2-plug.moyer.wtf
+      description: meer8-2 plug
+      icon: https://meer8-2-plug.moyer.wtf/favicon.ico
+  - meer5-0-plug:
+    - abbr: M0
+      href: https://meer5-0-plug.moyer.wtf
+      description: meer5-0-plug
+      icon: https://meer5-0-plug.moyer.wtf/favicon.ico
+  - desktop-0-plug:
+    - abbr: D0
+      href: https://desktop-0-plug.moyer.wtf
+      description: desktop-0-plug
+      icon: https://desktop-0-plug.moyer.wtf/favicon.ico
+  - Main bedroom TV:
+    - abbr: MB
+      href: https://main-bedroom-tv.moyer.wtf
+      description: Main bedroom TV
+      icon: https://main-bedroom-tv.moyer.wtf/favicon.ico
+  - Livingroom TV:
+    - abbr: LT
+      href: https://livingroom-tv.moyer.wtf
+      description: Livingroom TV
+      icon: https://livingroom-tv.moyer.wtf/favicon.ico
+  - Eufy Robot Vacuum:
+    - abbr: ER
+      href: https://vasilly.moyer.wtf
+      description: Eufy Robot Vacuum
+      icon: https://vasilly.moyer.wtf/favicon.ico
+  - Eufy Chime:
+    - abbr: EC
+      href: https://eufy-chime.moyer.wtf
+      description: Eufy Chime
+      icon: https://eufy-chime.moyer.wtf/favicon.ico
+  - Air Purifier (1st Floor):
+    - abbr: AP
+      href: https://clean-air-1.moyer.wtf
+      description: Air Purifier (1st Floor)
+      icon: https://clean-air-1.moyer.wtf/favicon.ico
+  - Air Purifier (2nd Floor):
+    - abbr: AP
+      href: https://clean-air-2.moyer.wtf
+      description: Air Purifier (2nd Floor)
+      icon: https://clean-air-2.moyer.wtf/favicon.ico
+  - Skylight:
+    - abbr: SK
+      href: https://skylight.moyer.wtf
+      description: Skylight
+      icon: https://skylight.moyer.wtf/favicon.ico

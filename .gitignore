@@ -19,6 +19,7 @@ network-configs/external_records.json
 network-configs/dry-run/
 *.log
 node_modules/
+network-configs/gen/
 
 # OS Files
 .DS_Store
