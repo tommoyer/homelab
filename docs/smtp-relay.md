@@ -1,76 +1,30 @@
-Date : 2025-12-30 19h21
+# SMTP Relay (Outbound) for Homelab Services
 
-# Prompt 1
-
-> **I have a Gitea server running in my homelab and would like to set up email for notifications and user verification. What is the best way to set up SMTP so that I can successfully send email from my gitea server and other services in the future?**
-
-## ChatGPT GPT-5-2-THINKING :
-
-Recommended approach for a homelab: “local relay” + reputable outbound SMTP service
-
-For Gitea (and future services), the most reliable setup is:
-
-1. 
-Use a transactional outbound SMTP provider (SMTP relay) for Internet delivery.
-
-2. 
-Optionally run one internal SMTP relay (Postfix or similar) that all your apps talk to, and have that relay forward to the provider.
-
-This avoids the two biggest pain points of self-hosting outbound email at home: deliverability (PTR/rDNS, reputation, blacklists) and ISP port 25 blocking. [Server Fault+1](https://serverfault.com/questions/452653/many-isps-is-block-port-25-how-do-i-choose-an-alternative-port?utm_source=chatgpt.com)
-
-Why not “just run a mail server at home” for outbound?
-
-- 
-Many residential networks/ISPs block or discourage outbound SMTP on port 25. [Server Fault](https://serverfault.com/questions/452653/many-isps-is-block-port-25-how-do-i-choose-an-alternative-port?utm_source=chatgpt.com)
-
-- 
-Proper reverse DNS (PTR) is controlled by whoever owns the IP space (your ISP), and without it you’ll hit deliverability issues. [Super User+1](https://superuser.com/questions/1740921/ip-doesnt-support-rdns-needed-for-email-server?utm_source=chatgpt.com)
-
-What to choose as the outbound SMTP provider
-
-Pick a provider that supports:
-
-- 
-SMTP submission on 465 (SMTPS) or 587 (STARTTLS)
-
-- 
-Domain verification + DKIM signing
-
-- 
-Reasonable free/low-cost tier and clear logs
-
-Common choices: Amazon SES, Mailgun, SendGrid, Postmark, SMTP2GO (any of these work; choose based on budget and volume).
-
-DNS requirements (critical for deliverability)
-
-Whichever provider you choose, configure:
-
-- 
-SPF (authorizes which servers can send for your domain)
-
-- 
-DKIM (cryptographic signing)
----
-
-# SMTP Relay Setup Guide (Homelab / Gitea)
-
-Date: 2025-12-30 19:21
+Last updated: 2025-12-30
 
 ## Overview
 
-Recommended pattern: run an internal SMTP relay (Postfix) on your LAN and forward mail to a reputable outbound SMTP provider. This avoids deliverability issues (PTR/rDNS, reputation, spam filters) and ISP port 25 blocks.
+Recommended pattern for a homelab:
+
+1. Use a reputable transactional SMTP provider for Internet delivery.
+2. Run one internal SMTP relay (Postfix) that all apps talk to, and have it forward to the provider.
+
+This avoids the two biggest pain points of self-hosting outbound email at home:
+
+- Deliverability (PTR/rDNS, IP reputation, blacklists)
+- ISP blocks/filters on outbound TCP/25
 
 ## Choosing an Outbound SMTP Provider
 
-Providers should support:
+Pick a provider that supports:
 
 - SMTP submission on 465 (SMTPS) or 587 (STARTTLS)
 - Domain verification + DKIM signing
-- Clear logs and reasonable free/low-cost tiers
+- Clear logs, bounces/blocks visibility, and reasonable pricing
 
 Common choices: Amazon SES, Mailgun, SendGrid, Postmark, SMTP2GO, Brevo (Sendinblue), Mailjet, Fastmail, Zoho.
 
-Cloudflare Email Routing is inbound only (no outbound SMTP).
+Note: Cloudflare Email Routing is inbound only (no outbound SMTP).
 
 ## DNS Requirements (Deliverability)
 
@@ -82,7 +36,7 @@ Publish the following for your sending domain:
 
 Your SMTP provider will give exact record values during domain authentication.
 
-Optional: Publish a Null MX to signal “no inbound mail” (e.g., `moyer.wtf MX 0 .`).
+Optional: publish a Null MX to signal “no inbound mail” (example): `moyer.wtf MX 0 .`.
 
 ## Gitea Configuration (Mailer)
 
@@ -283,268 +237,135 @@ Evidence of success and DSNs delivered locally:
 
 ---
 
-- 
-DSNs are now delivered locally instead of being relayed to Brevo:
+## Cleanups / Hardening
 
-relay=local ... status=sent (delivered to mailbox) for root@moyer.wtf
+### 1) Remove deprecated `smtp_use_tls`
 
-So the mydestination = ... $mydomain change worked as intended.
+If you still see a warning like:
 
-Cleanups / hardening to do now
-1) Remove deprecated smtp_use_tls
+> support for parameter "smtp_use_tls" will be removed; instead, specify "smtp_tls_security_level"
 
-You still have the warning:
-support for parameter "smtp_use_tls" will be removed; instead, specify "smtp_tls_security_level"
+Fix it:
 
-Fix:
-
-bashCopy codesudo postconf -n | grep -E '^smtp_use_tls|^smtp_tls_security_level'
+```bash
+sudo postconf -n | grep -E '^smtp_use_tls|^smtp_tls_security_level'
 sudo postconf -X smtp_use_tls
 sudo postfix reload
+```
 
-Confirm warning is gone on next restart/reload:
+Confirm the warning is gone:
 
-bashCopy codesudo systemctl restart postfix
+```bash
+sudo systemctl restart postfix
 sudo journalctl -u postfix -n 50 --no-pager
+```
 
-2) Lock relay access to VLAN10 only (you already did in Postfix; enforce at network too)
-On the Debian relay (nftables), ensure only 192.168.10.0/24 can connect to TCP/25. If you haven’t applied nftables yet, do it now; it’s the enforcement that actually matters when everything is on the same L2 segment (the MikroTik firewall often won’t see same-VLAN traffic).
+### 2) Ensure only VLAN10 can reach TCP/25
 
-Minimal nftables input rules (keep what you already have, this is just the SMTP part):
+Even if Postfix is configured with `mynetworks`, enforce it at the host firewall as well (especially if traffic stays L2 and the router never sees it).
 
-nftCopy codeip saddr 192.168.10.0/24 tcp dport 25 accept
+Minimal nftables rule idea (SMTP portion only):
+
+```nft
+ip saddr 192.168.10.0/24 tcp dport 25 accept
 tcp dport 25 drop
+```
 
-3) (Optional) Make the From address less “root”
-Your test mail is going out as root@moyer.wtf. For app mail you’ll likely want something like:
+### 3) Prefer a non-root sender
 
-- 
-noreply@moyer.wtf or gitea@moyer.wtf
+For app mail, standardize on something like:
 
-For shell tests you can do:
+- `noreply@moyer.wtf`
+- `gitea@moyer.wtf`
 
-bashCopy codeprintf "Subject: test\nFrom: noreply@moyer.wtf\n\nhello\n" | sendmail -v tommoyer@gmail.com
+For a one-off shell test with an explicit From:
 
-Next step: configure Gitea to use the relay
-Point Gitea at:
-
-- 
-SMTP host: smtp-relay.<your-lan-domain> (or the relay IP)
-
-- 
-Port: 25
-
-- 
-TLS: off
-
-- 
-Auth: none
-
-- 
-From: noreply@moyer.wtf
-
-If you paste your current Gitea [mailer] section, I’ll provide the exact app.ini stanza.
+```bash
+printf "Subject: test\nFrom: noreply@moyer.wtf\n\nhello\n" | sendmail -v you@example.com
+```
 
 
----
+## If Gmail Doesn’t Receive the Test Email
 
-# Prompt 9
+If Postfix logs show `status=sent`, that only proves the relay-to-provider hop worked (not that Gmail accepted it).
 
-> **I didn't see the test email in my gmail account**
+Do this in order:
 
-## ChatGPT GPT-5-2-THINKING :
+1. Check Gmail placement
+	- Look in Spam and All Mail
+	- Search Gmail for `subject:"postfix relay test"` and `from:root@moyer.wtf`
+2. Check provider logs (most important)
+	- In your provider (e.g., Brevo), check SMTP activity/transactional logs
+	- Search by recipient and/or Message-ID (from Postfix logs)
+	- Look for “blocked”, “bounced”, or “not authorized sender”
+3. Make the sender a verified address (common root cause)
+	- Prefer `noreply@moyer.wtf` (or `gitea@moyer.wtf`) rather than `root@moyer.wtf`
+	- Ensure the domain is authenticated with SPF/DKIM/DMARC
+4. Optional: rewrite outbound `root@…` to `noreply@…`
 
-Postfix successfully handed the message to Brevo (status=sent … queued as …). That only proves the relay-to-provider hop worked; it does not prove Gmail received it.
+Create `/etc/postfix/generic`:
 
-Do this in order.
-
-1) Check Gmail first
-
-- 
-Look in Spam and All Mail
-
-- 
-Use Gmail search: subject:"postfix relay test" and also search for from:root@moyer.wtf
-
-2) Check whether Brevo actually delivered (most important)
-
-Brevo can accept a message and then later classify it as blocked/bounced/deferred. You need Brevo’s side status.
-
-In Brevo, look for SMTP activity/logs (Transactional/SMTP logs) and search for:
-
-- 
-Recipient: tommoyer@gmail.com
-
-- 
-Time: the timestamp in your Postfix log
-
-- 
-Message ID: 20251230201630.80DA764B@smtp-relay.homelab.moyer.wtf (from your log)
-
-If Brevo shows anything like “blocked”, “bounced”, or “not authorized sender”, that’s the reason.
-
-3) Make the sender a verified address (likely root cause)
-
-Right now you’re sending as root@moyer.wtf. Many SMTP providers (and Gmail filters) are much happier if:
-
-- 
-The envelope sender and From: are a real, verified sender (e.g., noreply@moyer.wtf)
-
-- 
-Your domain is authenticated in Brevo (SPF/DKIM)
-
-3a) Rewrite root@moyer.wtf to noreply@moyer.wtf on outbound mail
-
-Create /etc/postfix/generic:
-
-confCopy coderoot@moyer.wtf noreply@moyer.wtf
+```conf
+root@moyer.wtf noreply@moyer.wtf
 root@smtp-relay.homelab.moyer.wtf noreply@moyer.wtf
+```
 
-Enable it in Postfix:
+Enable it:
 
-bashCopy codesudo postmap /etc/postfix/generic
+```bash
+sudo postmap /etc/postfix/generic
 sudo postconf -e 'smtp_generic_maps = hash:/etc/postfix/generic'
 sudo postfix reload
+```
 
-Send a new test with a unique subject:
+Send another test with a unique subject:
 
-bashCopy codeprintf "Subject: postfix relay test 2\n\nhello\n" | sendmail -v tommoyer@gmail.com
+```bash
+printf "Subject: postfix relay test 2\n\nhello\n" | sendmail -v you@example.com
+```
 
-4) Verify moyer.wtf in Brevo (SPF/DKIM)
-In Brevo, add/verify your sending domain and publish the SPF/DKIM records it gives you in Cloudflare DNS. Until this is done, delivery to Gmail may be unreliable or filtered.
+5. High-signal testing: use `swaks`
 
-5) Remove the deprecated TLS setting warning
-
-You still have smtp_use_tls set somewhere.
-
-bashCopy codesudo postconf -n | grep -E '^smtp_use_tls|^smtp_tls_security_level'
-sudo postconf -X smtp_use_tls
-sudo postfix reload
-
-6) If you want a quick, high-signal test output
-Install swaks and test end-to-end (still via your relay):
-
-bashCopy codesudo apt install -y swaks
-swaks --to tommoyer@gmail.com --server 127.0.0.1 --port 25 --from noreply@moyer.wtf --header "Subject: swaks test $(date -Is)"
-
-If you paste:
-
-- 
-The Brevo log entry/status for that message, and
-
-- 
-postconf -n (sanitized: remove passwords/tokens)
-
-I can tell you exactly whether this is a sender verification/auth issue vs a deliverability/spam placement issue.
+```bash
+sudo apt install -y swaks
+swaks --to you@example.com --server 127.0.0.1 --port 25 --from noreply@moyer.wtf --header "Subject: swaks test $(date -Is)"
+```
 
 
----
+## Application Settings (Gitea and Other Services)
 
-# Prompt 10
+Treat the Postfix host as a trusted internal SMTP relay and keep application SMTP settings simple.
 
-> **What settings should I use for Gitea (and other services) once my Postfix relay is up an running?**
+Recommended defaults for most apps:
 
-## ChatGPT GPT-5-2-THINKING :
+- SMTP host: `smtp-relay.<lan-domain>` (or the relay IP)
+- SMTP port: `25`
+- Encryption/TLS: off
+- Authentication: off
+- From address: a standardized sender (e.g., `noreply@moyer.wtf` or `gitea@moyer.wtf`)
+- HELO/EHLO name (if the app asks): app hostname or `smtp-relay.<lan-domain>`
 
-Use the Postfix host as a trusted internal SMTP relay and keep application SMTP settings simple.
+Rationale: TLS/auth is enforced by your network boundary (only trusted networks can reach the relay) and by Postfix (`mynetworks`).
 
-Common settings for all services (recommended)
+### Gitea app.ini example
 
-- 
-SMTP host: smtp-relay.<lan-domain> (or IP)
-
-- 
-SMTP port: 25
-
-- 
-Encryption/TLS: None / Off
-
-- 
-Authentication: None / Off
-
-- 
-From address: a real sender you’ll standardize on (examples)
-
-noreply@moyer.wtf (generic)
-
-- 
-gitea@moyer.wtf (service-specific)
-
-HELO/EHLO name (if the app asks): smtp-relay.<lan-domain> or the app’s hostname
-
-Rationale: TLS/auth should be enforced at the network boundary (only VLAN10 can reach TCP/25 on the relay) and by Postfix (mynetworks=192.168.10.0/24).
-
-Gitea app.ini mail settings
-
-In app.ini (or your equivalent env vars if using Docker), configure:
-
-iniCopy code[mailer]
-ENABLED = true
-FROM = "Gitea <gitea@moyer.wtf>"
-PROTOCOL = smtp
+```ini
+[mailer]
+ENABLED   = true
+FROM      = "Gitea <gitea@moyer.wtf>"
+PROTOCOL  = smtp
 SMTP_ADDR = smtp-relay.lan
 SMTP_PORT = 25
-USER =
-PASSWD =
+USER      =
+PASSWD    =
+```
 
-Then enable the behaviors you want:
+Enable the behaviors you want:
 
-iniCopy code[service]
+```ini
+[service]
 REGISTER_EMAIL_CONFIRM = true    ; user verification emails
-ENABLE_NOTIFY_MAIL = true        ; repo/activity notifications
+ENABLE_NOTIFY_MAIL     = true    ; repo/activity notifications
+```
 
-Notes:
-
-- 
-Leave USER/PASSWD empty because your relay is internal.
-
-- 
-If you see “invalid sender” or missing mail in Gmail, ensure gitea@moyer.wtf (or noreply@moyer.wtf) is allowed/verified in your upstream provider and your SPF/DKIM/DMARC are published.
-
-Other services: mapping
-
-Most apps have the same fields; translate as:
-
-- 
-“SMTP server/host” → smtp-relay.lan
-
-- 
-“SMTP port” → 25
-
-- 
-“Use SSL/TLS” → unchecked
-
-- 
-“Use STARTTLS” → unchecked
-
-- 
-“SMTP username/password” → blank
-
-- 
-“Sender / From” → noreply@moyer.wtf or service@moyer.wtf
-
-Optional but recommended: use a dedicated “envelope sender” domain/subdomain
-
-If your upstream (Brevo/Mailjet/etc.) supports it, consider:
-
-- 
-From addresses like noreply@notify.moyer.wtf
-This lets you isolate email auth and reputation from any other use of moyer.wtf. You still don’t need inbound mail.
-
-Verification checklist (per service)
-
-After configuring a service, send a test and confirm:
-
-- 
-Relay accepts it: /var/log/mail.log or journalctl -u postfix
-
-- 
-Upstream accepts it (Brevo logs)
-
-- 
-Gmail receives it (Inbox or Spam)
-
-- 
-Headers show SPF/DKIM pass (once DNS is set)
-
-If you tell me how you deployed Gitea (Docker/LXC/VM) I can provide the exact env var equivalents (Gitea supports both file config and env overrides).
+If you see “invalid sender” or missing mail at Gmail, ensure your chosen From address/domain is allowed by your upstream provider and your SPF/DKIM/DMARC are published.

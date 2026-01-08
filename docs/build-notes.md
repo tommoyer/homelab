@@ -142,7 +142,7 @@ The Tailscale router for routing traffic between Tailscale and the homelab VLAN
 - Base OS: Debian 13
 - Container/VM: LXC container via Proxmox
 - Tailscale installed via [Proxmox Helper Script for Tailscale](https://community-scripts.github.io/ProxmoxVE/scripts?id=add-tailscale-lxc&category=Proxmox+%26+Virtualization)
-- Configured as a subnet router for the homelab VLAN
+- Configured as a subnet router for the homelab VLAN [notes](https://tailscale.com/kb/1406/quick-guide-subnets)
 
 ```
 tailscale up --advertise-routes=192.168.10.0/24,192.168.20.0/24
