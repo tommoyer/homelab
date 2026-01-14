@@ -1,0 +1,17 @@
+schema_version: 1
+services:
+- service_id: proxy-tcp80
+  name: Caddy
+  asset_id: proxy
+  vlan_id: dmz
+  interface_id: dmz
+  ports:
+    service_ports:
+    - port: 80
+      proto: tcp
+    firewall_ports: []
+  routing:
+    via_caddy: false
+  backend:
+    ip: null
+    port: 80

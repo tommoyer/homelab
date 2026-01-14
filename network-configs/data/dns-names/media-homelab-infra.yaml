@@ -1,0 +1,18 @@
+schema_version: 1
+dns_names:
+- dns_id: media-homelab-infra
+  kind: infra
+  fqdn: media.homelab.moyer.wtf
+  targets:
+    service_id: null
+    asset_id: media
+  internal:
+    enabled: true
+    provider: inherit_vlan
+    address: asset_interface_ip
+    record_type: A
+    interface_id: homelab
+    publish_scopes:
+    - self
+  external:
+    enabled: false

@@ -1,0 +1,18 @@
+schema_version: 1
+dns_names:
+- dns_id: proxy-dmz-infra
+  kind: infra
+  fqdn: proxy.dmz.moyer.wtf
+  targets:
+    service_id: null
+    asset_id: proxy
+  internal:
+    enabled: true
+    provider: inherit_vlan
+    address: asset_interface_ip
+    record_type: A
+    interface_id: dmz
+    publish_scopes:
+    - self
+  external:
+    enabled: false

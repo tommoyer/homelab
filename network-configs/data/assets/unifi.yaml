@@ -1,0 +1,10 @@
+schema_version: 1
+assets:
+- asset_id: unifi
+  hostname: unifi
+  type: unknown
+  interfaces:
+  - if_id: homelab
+    vlan_id: homelab
+    ip: 192.168.10.22
+    dns_provider: pihole

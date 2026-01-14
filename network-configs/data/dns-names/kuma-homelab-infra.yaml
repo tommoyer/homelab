@@ -1,0 +1,18 @@
+schema_version: 1
+dns_names:
+- dns_id: kuma-homelab-infra
+  kind: infra
+  fqdn: kuma.homelab.moyer.wtf
+  targets:
+    service_id: null
+    asset_id: kuma
+  internal:
+    enabled: true
+    provider: inherit_vlan
+    address: asset_interface_ip
+    record_type: A
+    interface_id: homelab
+    publish_scopes:
+    - self
+  external:
+    enabled: false

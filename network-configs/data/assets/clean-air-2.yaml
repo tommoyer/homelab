@@ -1,0 +1,10 @@
+schema_version: 1
+assets:
+- asset_id: clean-air-2
+  hostname: clean-air-2
+  type: unknown
+  interfaces:
+  - if_id: hivemind
+    vlan_id: hivemind
+    ip: dynamic
+    dns_provider: pihole

@@ -5,6 +5,16 @@ vars:
   dest: '{{default "/opt/www" .WWW_PATH}}'
 
 tasks:
+  bootstrap:
+    desc: Ensure /opt/www is initialized (.env exists; gitea login performed).
+    preconditions:
+      - sh: "command -v ssh >/dev/null"
+        msg: "ssh is required"
+    cmds:
+      - ssh {{.host}} "mkdir -p {{.dest}}"
+      - ssh {{.host}} "cd {{.dest}} && if [ ! -f .env ]; then if [ -f env.example ]; then cp env.example .env; else touch .env; fi; fi"
+      - ssh {{.host}} "cd {{.dest}} && if [ ! -f gitea-login.sh ]; then echo 'gitea-login.sh missing in {{.dest}} (run task sync first)' >&2; exit 1; fi && chmod +x gitea-login.sh && ./gitea-login.sh"
+
   sync:
     desc: Copy www files to the remote host.
     preconditions:
@@ -18,6 +28,8 @@ tasks:
 
   up:
     desc: Start the service via docker compose on the remote host.
+    deps:
+      - bootstrap
     preconditions:
       - sh: "command -v ssh >/dev/null"
         msg: "ssh is required"
@@ -26,6 +38,8 @@ tasks:
 
   pull:
     desc: Pull the latest images and restart the containers.
+    deps:
+      - bootstrap
     preconditions:
       - sh: "command -v ssh >/dev/null"
         msg: "ssh is required"

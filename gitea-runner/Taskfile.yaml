@@ -1,0 +1,33 @@
+version: "3"
+
+vars:
+  host: '{{default "root@gitea-runner.homelab.moyer.wtf" .RUNNER_HOST}}'
+  dest: '{{default "/opt/runner" .RUNNER_PATH}}'
+
+tasks:
+  sync:
+    desc: Copy proxy files to the container (excluding .env).
+    preconditions:
+      - sh: "command -v tar >/dev/null"
+        msg: "tar is required"
+      - sh: "command -v ssh >/dev/null"
+        msg: "ssh is required"
+    cmds:
+      - ssh {{.host}} "mkdir -p {{.dest}}"
+      - tar --exclude='.env' -cf - . | ssh {{.host}} "tar -xf - -C {{.dest}}"
+
+  up:
+    desc: Build and start the proxy via docker compose inside the container.
+    preconditions:
+      - sh: "command -v ssh >/dev/null"
+        msg: "ssh is required"
+    cmds:
+      - ssh {{.host}} "cd {{.dest}} && docker compose up --build -d"
+
+  deploy:
+    desc: Sync files then build and start the proxy.
+    deps:
+      - sync
+    cmds:
+      - task: up
+    silent: true

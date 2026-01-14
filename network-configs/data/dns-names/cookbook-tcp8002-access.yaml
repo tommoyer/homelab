@@ -1,0 +1,25 @@
+schema_version: 1
+dns_names:
+- dns_id: cookbook-tcp8002-access
+  kind: access
+  fqdn: cookbook.moyer.wtf
+  targets:
+    service_id: cookbook-tcp8002
+    asset_id: null
+  internal:
+    enabled: true
+    provider: inherit_vlan
+    address: routing_internal_dns_target
+    record_type: A
+    publish_scopes:
+    - self
+    - user_vlan_if_enabled
+  external:
+    enabled: true
+    provider: cloudflare
+    record_type: A
+    target: cloudflare_target_ip
+    proxied: true
+  cloudflare:
+    target_ip: 207.144.81.217
+    proxy_status: proxied

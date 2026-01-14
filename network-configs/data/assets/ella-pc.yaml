@@ -1,0 +1,10 @@
+schema_version: 1
+assets:
+- asset_id: ella-pc
+  hostname: ella-pc
+  type: unknown
+  interfaces:
+  - if_id: hivemind
+    vlan_id: hivemind
+    ip: 192.168.1.15
+    dns_provider: pihole

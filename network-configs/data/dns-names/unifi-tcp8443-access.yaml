@@ -1,0 +1,18 @@
+schema_version: 1
+dns_names:
+- dns_id: unifi-tcp8443-access
+  kind: access
+  fqdn: unifi.moyer.wtf
+  targets:
+    service_id: unifi-tcp8443
+    asset_id: null
+  internal:
+    enabled: true
+    provider: inherit_vlan
+    address: routing_internal_dns_target
+    record_type: A
+    publish_scopes:
+    - self
+    - user_vlan_if_enabled
+  external:
+    enabled: false

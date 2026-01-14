@@ -1,0 +1,18 @@
+schema_version: 1
+dns_names:
+- dns_id: ts-router-homelab-infra
+  kind: infra
+  fqdn: ts-router.homelab.moyer.wtf
+  targets:
+    service_id: null
+    asset_id: ts-router
+  internal:
+    enabled: true
+    provider: inherit_vlan
+    address: asset_interface_ip
+    record_type: A
+    interface_id: homelab
+    publish_scopes:
+    - self
+  external:
+    enabled: false

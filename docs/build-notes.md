@@ -43,17 +43,6 @@ This Pi-hole instance serves the DMZ VLAN
 - Firewall ports for proxy:
     - None, same VLAN
 
-## `multicast-relay`
-
-This service relays multicast traffic between VLANs to support mDNS discovery across the network
-
-- Base OS: Debian 13
-- Container/VM: LXC container via Proxmox
-- Installed via: [Github repository](https://github.com/alsmith/multicast-relay)
-- Tweaks/updates: Check issues in the repository for any custom tweaks or updates made
-- Firewall ports for proxy:
-    - DMZ[Tailscale] -> Homelab VLAN: 80 (HTTP)
-
 ## `homarr`
 
 The Homarr dashboard for managing and monitoring services
@@ -115,7 +104,7 @@ Vaultwarden for self-hosted password management
 
 - Installed via [Proxmox Helper Script for Vaultwarden](https://community-scripts.github.io/ProxmoxVE/scripts?id=vaultwarden)
 
-## `Grafana`
+## `grafana`
 
 The Grafana application for data visualization and monitoring
 
@@ -149,3 +138,30 @@ tailscale up --advertise-routes=192.168.10.0/24,192.168.20.0/24
 ```
 
 - Approved in the Tailscale admin console
+
+## `pbs`
+
+The Proxmox Backup Server for backing up Proxmox VMs and containers
+
+- Installed via [Proxmox Helper Script for Proxmox Backup Server](https://community-scripts.github.io/ProxmoxVE/scripts?id=proxmox-backup-server)
+- Configured intialliy via the [PBS Post Install Script](https://community-scripts.github.io/ProxmoxVE/scripts?id=post-pbs-install&category=Proxmox+%26+Virtualization)
+
+## `gitea-runner`
+
+The Gitea Runner for running CI/CD pipelines from Gitea
+
+- Installed via [Proxmox Helper Script for Docker LXC](https://community-scripts.github.io/ProxmoxVE/scripts?id=docker&category=Containers+%26+Docker)
+- Dockerfile and configuration managed in the `gitea-runner` folder of this repository
+- Added a DNS record to `/etc/hosts` to resolve `git.moyer.wtf` to the Caddy proxy in the DMZ
+- TODO: Should we publish A record for `git.moyer.wtf` in Pihole instead of editing `/etc/hosts`?
+- Changed permissions of `/var/run/docker.sock` to `666` to allow the Gitea Runner to access Docker
+
+## `www`
+
+The static website hosted at `thomasmoyer.org`
+
+- Installed via [Proxmox Helper Script for Docker LXC](https://community-scripts.github.io/ProxmoxVE/scripts?id=docker&category=Containers+%26+Docker)
+- Dockerfile and configuration managed in the `www` folder of this repository
+- Added a DNS record to `/etc/hosts` to resolve `git.moyer.wtf` to the Caddy proxy in the DMZ
+- TODO: Should we publish A record for `git.moyer.wtf` in Pihole instead of editing `/etc/hosts`?
+- Set GITEA_TOKEN secret in Proxmox LXC container for pushing updates to Gitea

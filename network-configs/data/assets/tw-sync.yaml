@@ -1,0 +1,10 @@
+schema_version: 1
+assets:
+- asset_id: tw-sync
+  hostname: tw-sync
+  type: unknown
+  interfaces:
+  - if_id: homelab
+    vlan_id: homelab
+    ip: 192.168.10.21
+    dns_provider: pihole

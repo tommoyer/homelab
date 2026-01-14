@@ -1,7 +1,7 @@
 # ----- DEV: live reload via Hugo server -----
 services:
   prod:
-    image: ghcr.io/tommoyer/www:latest
+    image: git.moyer.wtf/tom-tom/www:latest
     pull_policy: always
     environment:
       - PORT=8080

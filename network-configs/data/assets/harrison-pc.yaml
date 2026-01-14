@@ -1,0 +1,10 @@
+schema_version: 1
+assets:
+- asset_id: harrison-pc
+  hostname: harrison-pc
+  type: unknown
+  interfaces:
+  - if_id: hivemind
+    vlan_id: hivemind
+    ip: 192.168.1.12
+    dns_provider: pihole
