@@ -1,0 +1,10 @@
+schema_version: 1
+assets:
+- asset_id: meer8-1
+  hostname: meer8-1
+  type: unknown
+  interfaces:
+  - if_id: homelab
+    vlan_id: homelab
+    ip: 192.168.10.4
+    dns_provider: pihole

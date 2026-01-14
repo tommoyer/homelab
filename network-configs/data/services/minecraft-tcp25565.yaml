@@ -1,0 +1,24 @@
+schema_version: 1
+services:
+- service_id: minecraft-tcp25565
+  name: Minecraft
+  asset_id: minecraft
+  vlan_id: homelab
+  interface_id: homelab
+  ports:
+    service_ports:
+    - port: 25565
+      proto: tcp
+    - port: 19132
+      proto: udp
+    firewall_ports:
+    - port: 25565
+      proto: tcp
+    - port: 19132
+      proto: udp
+  routing:
+    via_caddy: false
+    internal_dns_target: 192.168.10.10
+  backend:
+    ip: null
+    port: 25565

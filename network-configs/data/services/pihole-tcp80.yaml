@@ -1,0 +1,22 @@
+schema_version: 1
+services:
+- service_id: pihole-tcp80
+  name: PiHole
+  asset_id: pihole
+  vlan_id: hivemind
+  interface_id: hivemind
+  ports:
+    service_ports:
+    - port: 80
+      proto: tcp
+    firewall_ports:
+    - port: 80
+      proto: tcp
+    - port: 443
+      proto: tcp
+  routing:
+    via_caddy: true
+    internal_dns_target: 192.168.20.3
+  backend:
+    ip: null
+    port: 80

@@ -1,0 +1,17 @@
+schema_version: 1
+dns_names:
+- dns_id: proxy-tcp80-access
+  kind: access
+  fqdn: proxy.moyer.wtf
+  targets:
+    service_id: proxy-tcp80
+    asset_id: null
+  internal:
+    enabled: true
+    provider: inherit_vlan
+    address: service_backend_ip
+    record_type: A
+    publish_scopes:
+    - self
+  external:
+    enabled: false

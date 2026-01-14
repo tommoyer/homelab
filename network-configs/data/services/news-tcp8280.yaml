@@ -1,0 +1,22 @@
+schema_version: 1
+services:
+- service_id: news-tcp8280
+  name: Tiny Tiny RSS
+  asset_id: news
+  vlan_id: homelab
+  interface_id: homelab
+  ports:
+    service_ports:
+    - port: 8280
+      proto: tcp
+    firewall_ports:
+    - port: 80
+      proto: tcp
+    - port: 443
+      proto: tcp
+  routing:
+    via_caddy: true
+    internal_dns_target: 192.168.20.3
+  backend:
+    ip: null
+    port: 8280

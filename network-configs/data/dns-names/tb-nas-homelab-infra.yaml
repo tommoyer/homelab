@@ -1,0 +1,18 @@
+schema_version: 1
+dns_names:
+- dns_id: tb-nas-homelab-infra
+  kind: infra
+  fqdn: tb-nas.homelab.moyer.wtf
+  targets:
+    service_id: null
+    asset_id: tb-nas
+  internal:
+    enabled: true
+    provider: inherit_vlan
+    address: asset_interface_ip
+    record_type: A
+    interface_id: homelab
+    publish_scopes:
+    - self
+  external:
+    enabled: false

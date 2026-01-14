@@ -1,0 +1,18 @@
+schema_version: 1
+dns_names:
+- dns_id: clean-air-2-hivemind-infra
+  kind: infra
+  fqdn: clean-air-2.hivemind.moyer.wtf
+  targets:
+    service_id: null
+    asset_id: clean-air-2
+  internal:
+    enabled: true
+    provider: inherit_vlan
+    address: asset_interface_ip
+    record_type: A
+    interface_id: hivemind
+    publish_scopes:
+    - self
+  external:
+    enabled: false

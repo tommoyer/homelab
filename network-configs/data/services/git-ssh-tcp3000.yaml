@@ -1,0 +1,24 @@
+schema_version: 1
+services:
+- service_id: git-ssh-tcp3000
+  name: Gitea (SSH)
+  asset_id: git-ssh
+  vlan_id: homelab
+  interface_id: homelab
+  ports:
+    service_ports:
+    - port: 3000
+      proto: tcp
+    - port: 22
+      proto: tcp
+    firewall_ports:
+    - port: 3000
+      proto: tcp
+    - port: 22
+      proto: tcp
+  routing:
+    via_caddy: false
+    internal_dns_target: 192.168.10.13
+  backend:
+    ip: null
+    port: 3000
