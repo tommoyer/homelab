@@ -3,10 +3,6 @@
 - Ollama
 - OpenWebUI
 
-# Currently broken things
-
-- Multicast relay between VLANs
-
 # New features to implement
 
 - Kid Control script

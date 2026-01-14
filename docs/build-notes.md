@@ -134,7 +134,7 @@ The Tailscale router for routing traffic between Tailscale and the homelab VLAN
 - Configured as a subnet router for the homelab VLAN [notes](https://tailscale.com/kb/1406/quick-guide-subnets)
 
 ```
-tailscale up --advertise-routes=192.168.10.0/24,192.168.20.0/24
+tailscale up --advertise-routes=192.168.1.0/24,192.168.10.0/24,192.168.20.0/24
 ```
 
 - Approved in the Tailscale admin console
