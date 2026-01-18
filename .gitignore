@@ -20,6 +20,7 @@ network-configs/dry-run/
 *.log
 node_modules/
 network-configs/gen/
+network-configs-new/downloads/
 
 # OS Files
 .DS_Store
