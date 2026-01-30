@@ -1,2 +1,0 @@
-# Be sure to run `direnv allow .` after copying this file to .envrc
-export CLOUDFLARE_API_TOKEN="[redacted]"
