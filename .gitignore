@@ -31,3 +31,5 @@ Thumbs.db
 .idea/
 
 network-configs/cache
+
+external_records.json

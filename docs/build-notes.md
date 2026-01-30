@@ -165,3 +165,22 @@ The static website hosted at `thomasmoyer.org`
 - Added a DNS record to `/etc/hosts` to resolve `git.moyer.wtf` to the Caddy proxy in the DMZ
 - TODO: Should we publish A record for `git.moyer.wtf` in Pihole instead of editing `/etc/hosts`?
 - Set GITEA_TOKEN secret in Proxmox LXC container for pushing updates to Gitea
+
+## `netbox`
+
+The NetBox application for IP address management and data center infrastructure management
+
+- Installed via [Proxmox Helper Script for NetBox](https://community-scripts.github.io/ProxmoxVE/scripts?id=netbox)
+- Added plugins:
+    - Custom Objects
+    - DNS
+    - Bind Provisioner
+
+## `ns`
+
+The DNS server for Netbox managed DNS records
+
+- Base OS: Debian 13
+- Container/VM: LXC container via Proxmox
+- Installed BIND9 via apt
+- Configured to use Netbox [Bind Provisioner plugin](https://jpmens.net/2026/01/23/providing-zone-transfers-directly-from-netbox-dns/) to manage DNS records
