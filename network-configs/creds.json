@@ -1,6 +1,9 @@
 {
-    "cloudflare": {
-        "TYPE": "CLOUDFLAREAPI",
-        "apitoken": "$CLOUDFLARE_API_TOKEN"
-    }
+  "cloudflare": {
+    "TYPE": "CLOUDFLAREAPI",
+    "apitoken": "$CLOUDFLARE_API_TOKEN",
+    "accountid": "tommoyer@gmail.com"
+  },
+
+  "none": { "TYPE": "NONE" }
 }
