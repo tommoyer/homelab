@@ -25,15 +25,29 @@ def load_config(path: str, debug: bool) -> dict[str, Any]:
     return data
 
 
+def build_api_base_url(base_url: str) -> str:
+    if "/plugins/custom-objects/nat-policies" in base_url:
+        root = base_url.split("/plugins/custom-objects/nat-policies")[0]
+        return f"{root.rstrip('/')}/api"
+    if "/api/plugins/custom-objects/nat-policies" in base_url:
+        root = base_url.split("/api/plugins/custom-objects/nat-policies")[0]
+        return f"{root.rstrip('/')}/api"
+    if base_url.rstrip("/").endswith("/api"):
+        return base_url.rstrip("/")
+    return f"{base_url.rstrip('/')}/api"
+
+
 def build_url(base_url: str, debug: bool) -> str:
-    url = f"{base_url.rstrip('/')}/api/plugins/custom-objects/nat-policies/"
+    api_base = build_api_base_url(base_url)
+    url = f"{api_base}/plugins/custom-objects/nat-policies/"
     if debug:
         print(f"[debug] Built NetBox URL: {url}", file=sys.stderr)
     return url
 
 
 def build_services_url(base_url: str, debug: bool) -> str:
-    url = f"{base_url.rstrip('/')}/api/ipam/services/"
+    api_base = build_api_base_url(base_url)
+    url = f"{api_base}/ipam/services/"
     if debug:
         print(f"[debug] Built NetBox services URL: {url}", file=sys.stderr)
     return url

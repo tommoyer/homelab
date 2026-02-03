@@ -1,0 +1,13 @@
+{
+    email tommoyer@gmail.com
+}
+
+# ------------------------------------------------------------------
+# Server blocks generated from NetBox services
+# ------------------------------------------------------------------
+{{SERVER_BLOCKS}}
+
+http://192.168.20.3 {
+    respond /healthz "ok" 200
+    respond "not found" 404
+}

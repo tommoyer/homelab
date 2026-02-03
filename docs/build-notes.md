@@ -184,3 +184,11 @@ The DNS server for Netbox managed DNS records
 - Container/VM: LXC container via Proxmox
 - Installed BIND9 via apt
 - Configured to use Netbox [Bind Provisioner plugin](https://jpmens.net/2026/01/23/providing-zone-transfers-directly-from-netbox-dns/) to manage DNS records
+
+## `mumble`
+
+The Mumble server for voice communication
+
+- Base OS: Debian 13
+- Container/VM: LXC container via Proxmox
+- Installed from APT repository

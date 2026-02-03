@@ -15,12 +15,11 @@ secrets.json
 *.key
 
 # Generated Data
-network-configs/external_records.json
-network-configs/dry-run/
+network-configs/dns/external_records.json
 *.log
 node_modules/
-network-configs/gen/
-network-configs-new/downloads/
+**/downloads
+network-configs/downloads/
 
 # OS Files
 .DS_Store
