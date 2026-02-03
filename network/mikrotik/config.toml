@@ -2,25 +2,6 @@
 base_url = "https://192.168.10.30"
 work_dir = "./downloads"
 
-# DNS Zone Filters (for other scripts)
-netbox_zone_filters = [
-	{ zone = "moyer.wtf", views = ["external"] },
-	{ zone = "thomasmoyer.org", views = ["external"] },
-]
-
-# Caddy Configuration (for other scripts)
-caddy_zones = [
-	{ zone = "moyer.wtf", wildcard = true, redirect_www = false },
-	{ zone = "thomasmoyer.org", wildcard = true, redirect_www = true },
-]
-
-[caddy_deploy]
-host = "192.168.20.3"
-username = "root"
-path = "/opt/proxy/Caddyfile"
-restart_command = "cd /opt/proxy && docker compose restart"
-port = 22
-
 [router]
 host = "192.168.1.1"
 username = "admin"
@@ -31,7 +12,6 @@ place_before_comment = "Drop invalid/inter-VLAN forward"
 # IPAM to Security Module Sync Configuration
 # ============================================================================
 [ipam_to_security]
-config = "./config.toml"
 limit = 200
 
 # API Endpoints
