@@ -3,11 +3,9 @@ from __future__ import annotations
 
 import argparse
 import getpass
-import hashlib
 import ipaddress
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -243,153 +241,6 @@ def parse_extra_args(value: Any) -> list[str]:
     return []
 
 
-def slugify(value: str) -> str:
-    value = (value or "").strip().lower()
-    value = re.sub(r"[^a-z0-9]+", "-", value)
-    return value.strip("-")
-
-
-def stable_hash(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
-
-
-def effective_comment(rule: dict[str, Any]) -> str:
-    comment = rule.get("comment")
-    if comment:
-        return str(comment)
-    fallback = rule.get("policy_display") or rule.get("service_name") or "rule"
-    return str(fallback)
-
-
-def optimize_rules_with_address_lists(
-    rules: list[dict[str, Any]],
-    *,
-    debug: bool = False,
-) -> tuple[dict[str, list[str]], list[dict[str, Any]]]:
-    """Collapse repeated rules into address-lists.
-
-    If multiple rules are identical except for dst-address, emit one rule with
-    dst-address-list=<list> and create that list. Same idea for src-address.
-    """
-
-    def extra_args_key(rule: dict[str, Any]) -> tuple[str, ...]:
-        extra_args = rule.get("extra_args")
-        if isinstance(extra_args, list):
-            return tuple(str(x) for x in extra_args)
-        return tuple()
-
-    def base_key_dst(rule: dict[str, Any]) -> tuple[Any, ...]:
-        return (
-            rule.get("chain"),
-            rule.get("action"),
-            rule.get("in_interface"),
-            rule.get("out_interface"),
-            rule.get("protocol"),
-            rule.get("src_address"),
-            rule.get("src_port"),
-            rule.get("dst_port"),
-            effective_comment(rule),
-            extra_args_key(rule),
-        )
-
-    def base_key_src(rule: dict[str, Any]) -> tuple[Any, ...]:
-        return (
-            rule.get("chain"),
-            rule.get("action"),
-            rule.get("in_interface"),
-            rule.get("out_interface"),
-            rule.get("protocol"),
-            rule.get("dst_address"),
-            rule.get("src_port"),
-            rule.get("dst_port"),
-            effective_comment(rule),
-            extra_args_key(rule),
-        )
-
-    address_lists: dict[str, list[str]] = {}
-
-    # Pass 1: dst-address grouping.
-    dst_groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-    for rule in rules:
-        if not rule.get("dst_address"):
-            continue
-        dst_groups.setdefault(base_key_dst(rule), []).append(rule)
-
-    replaced: set[int] = set()
-    optimized: list[dict[str, Any]] = []
-    for key, group in dst_groups.items():
-        dst_addresses = sorted({str(r["dst_address"]) for r in group if r.get("dst_address")})
-        if len(dst_addresses) <= 1:
-            continue
-
-        proto = str(group[0].get("protocol") or "any")
-        dport = group[0].get("dst_port")
-        comment = effective_comment(group[0])
-        suffix = stable_hash(repr(key))
-        base = slugify(f"dst-{comment}-{proto}-{dport or 'any'}")
-        list_name = f"script-{base}"[:55]
-        list_name = f"{list_name}-{suffix}"
-
-        address_lists[list_name] = dst_addresses
-        merged = dict(group[0])
-        merged["dst_address"] = None
-        merged["dst_address_list"] = list_name
-        optimized.append(merged)
-        for r in group:
-            replaced.add(id(r))
-        if debug:
-            print(
-                f"[debug] Collapsed {len(group)} rules into dst-address-list={list_name}",
-                file=sys.stderr,
-            )
-
-    remaining = [r for r in rules if id(r) not in replaced]
-    remaining.extend(optimized)
-
-    # Pass 2: src-address grouping.
-    src_groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-    for rule in remaining:
-        if not rule.get("src_address"):
-            continue
-        if rule.get("dst_address_list"):
-            # Keep it simple: don't group src on already-grouped dst rules.
-            continue
-        src_groups.setdefault(base_key_src(rule), []).append(rule)
-
-    replaced = set()
-    optimized = []
-    for key, group in src_groups.items():
-        src_addresses = sorted({str(r["src_address"]) for r in group if r.get("src_address")})
-        if len(src_addresses) <= 1:
-            continue
-
-        proto = str(group[0].get("protocol") or "any")
-        sport = group[0].get("src_port")
-        comment = effective_comment(group[0])
-        suffix = stable_hash(repr(key))
-        base = slugify(f"src-{comment}-{proto}-{sport or 'any'}")
-        list_name = f"script-{base}"[:55]
-        list_name = f"{list_name}-{suffix}"
-
-        address_lists[list_name] = src_addresses
-        merged = dict(group[0])
-        merged["src_address"] = None
-        merged["src_address_list"] = list_name
-        optimized.append(merged)
-        for r in group:
-            replaced.add(id(r))
-        if debug:
-            print(
-                f"[debug] Collapsed {len(group)} rules into src-address-list={list_name}",
-                file=sys.stderr,
-            )
-
-    remaining = [r for r in remaining if id(r) not in replaced]
-    remaining.extend(optimized)
-
-    return address_lists, remaining
-
-
 def build_firewall_rules(
     policies: list[dict[str, Any]],
     service_map: dict[int, dict[str, Any]],
@@ -519,24 +370,21 @@ def quote_value(value: str) -> str:
     return f'"{escaped}"'
 
 
-def render_mikrotik_rules(rules: list[dict[str, Any]]) -> list[str]:
-    address_lists, optimized = optimize_rules_with_address_lists(rules)
+def render_mikrotik_rules(
+    rules: list[dict[str, Any]],
+    place_before_comment: str,
+) -> list[str]:
+    place_before_comment = (place_before_comment or "").strip()
+    if not place_before_comment:
+        place_before_comment = "Drop"
+    place_before_exact = quote_value(place_before_comment)
+
     lines: list[str] = [
-        '/ip firewall filter remove [find comment~"^\\[Script\\]"]',
-        '/ip firewall address-list remove [find comment~"^\\[Script\\]"]',
+        '/ip firewall filter remove [find comment~"^[[]Script[]]"]',
     ]
 
-    for list_name, addresses in sorted(address_lists.items()):
-        list_comment = f"[Script] {list_name}"
-        for address in addresses:
-            lines.append(
-                "/ip firewall address-list add "
-                f"list={list_name} address={address} "
-                f"comment={quote_value(list_comment)}"
-            )
-
-    for rule in optimized:
-        parts: list[str] = ["add"]
+    for rule in rules:
+        parts: list[str] = [f"place-before=[find comment={place_before_exact}]"]
         chain = rule.get("chain")
         if chain:
             parts.append(f"chain={chain}")
@@ -582,8 +430,8 @@ def render_mikrotik_rules(rules: list[dict[str, Any]]) -> list[str]:
         if comment:
             parts.append(f"comment={quote_value(f'[Script] {comment}')}")
 
-        line = "/ip firewall filter " + " ".join(parts)
-        lines.append(line)
+        base_cmd = "/ip firewall filter add " + " ".join(parts)
+        lines.append(base_cmd)
     return lines
 
 
@@ -595,6 +443,8 @@ def build_ssh_command(
     command = [
         "ssh",
         "-T",
+        "-o",
+        "LogLevel=ERROR",
         "-o",
         "ConnectTimeout=10",
         "-o",
@@ -647,9 +497,25 @@ def run_router_commands(
             env=env,
         )
         if result.returncode != 0:
-            if debug and result.stderr:
-                print(f"[debug] SSH stderr: {result.stderr.strip()}", file=sys.stderr)
-            raise RuntimeError(result.stderr.strip() or "Unknown SSH error")
+            if debug:
+                if result.stdout:
+                    print(
+                        f"[debug] SSH stdout: {result.stdout.strip()}",
+                        file=sys.stderr,
+                    )
+                if result.stderr:
+                    print(
+                        f"[debug] SSH stderr: {result.stderr.strip()}",
+                        file=sys.stderr,
+                    )
+            details = []
+            if result.stderr.strip():
+                details.append(result.stderr.strip())
+            if result.stdout.strip():
+                details.append(result.stdout.strip())
+            if not details:
+                details.append(f"SSH exited with status {result.returncode}")
+            raise RuntimeError(" | ".join(details))
     finally:
         if askpass_path:
             try:
@@ -802,7 +668,13 @@ def main() -> int:
     rules_output_path = args.rules_output or os.path.join(
         work_dir, "netbox-firewall-rules.rsc"
     )
-    script_text = "\n".join(render_mikrotik_rules(firewall_rules)) + "\n"
+    router_config = config.get("router", {})
+    if not isinstance(router_config, dict):
+        router_config = {}
+    place_before_comment = router_config.get("place_before_comment", "Drop")
+    script_text = (
+        "\n".join(render_mikrotik_rules(firewall_rules, place_before_comment)) + "\n"
+    )
     with open(rules_output_path, "w", encoding="utf-8") as handle:
         handle.write(script_text)
     print(f"Saved generated firewall rules script to {rules_output_path}")

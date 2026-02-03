@@ -5,8 +5,3 @@ netbox_zone_filters = [
 	{ zone = "moyer.wtf", views = ["external"] },
 	{ zone = "thomasmoyer.org", views = ["external"] },
 ]
-
-[router]
-host = "192.168.1.1"
-username = "admin"
-port = 22

@@ -1,6 +1,6 @@
 # NetBox DNS → Cloudflare (dnscontrol)
 
-This folder contains `update-dns.py`, which pulls DNS records from the NetBox DNS plugin and generates the files dnscontrol needs to update Cloudflare.
+This folder contains `update-dns.py`, which pulls DNS records from the NetBox DNS plugin and generates `external_records.json` for dnscontrol (Cloudflare).
 
 ## Requirements
 
@@ -15,32 +15,11 @@ This folder contains `update-dns.py`, which pulls DNS records from the NetBox DN
 - `NETBOX_API_KEY`: NetBox API token for reading DNS records.
 - `CLOUDFLARE_API_TOKEN`: Cloudflare API token used by dnscontrol.
 
-## dnscontrol credentials file
-
-dnscontrol reads Cloudflare credentials from a `creds.json` file in the dnscontrol directory. Create a file named `creds.json` in the same directory as your dnscontrol config with the following contents:
-
-```json
-{
-  "cloudflare": {
-    "TYPE": "CLOUDFLAREAPI",
-    "apitoken": "$CLOUDFLARE_API_TOKEN",
-    "accountid": "your-cloudflare-account-id-or-email"
-  },
-  "none": { "TYPE": "NONE" }
-}
-```
-
-The `apitoken` value is read from the `CLOUDFLARE_API_TOKEN` environment variable.
-
-## dnsconfig.js setup
-
-`dnsconfig.js` is static and lives in your dnscontrol directory. `update-dns.py` only writes `external_records.json`, which `dnsconfig.js` loads at runtime.
-
-If you keep dnscontrol files in a separate directory, pass `--dnscontrol-dir` or configure `dnscontrol_dir` in `config.toml` so `external_records.json` is written into that same directory.
-
 ## Config
 
-The script reads `config.toml` in this directory by default. Key settings:
+By default, the script reads `config.toml` in this directory.
+
+Common settings:
 
 - `base_url`: NetBox base URL.
 - `work_dir`: Where output files are written (defaults to `./downloads`).
@@ -48,7 +27,8 @@ The script reads `config.toml` in this directory by default. Key settings:
 - `netbox_zone_filters`: Zones/views to include for Cloudflare.
 - `dnscontrol_dir`: Directory containing dnscontrol config (optional).
 - `dnscontrol_bin`: dnscontrol binary name/path (optional).
-- `dnscontrol_records_path`: Optional override for external_records.json output.
+- `dnscontrol_records_path`: Optional override for `external_records.json` output.
+- `dnscontrol_no_check`: Skip `dnscontrol check` step when running dnscontrol.
 
 Example `netbox_zone_filters`:
 
@@ -59,12 +39,17 @@ netbox_zone_filters = [
 ]
 ```
 
+## dnscontrol notes
+
+- If `creds.json` exists in this folder, the script will default `external_records.json` to live alongside it.
+- `dnsconfig.js` is static; it loads `external_records.json` at runtime.
+
 ## Outputs
 
 When run, the script writes:
 
-- `downloads/netbox-dns-records.json`: Raw DNS records fetched from NetBox.
-- `downloads/external_records.json`: Cloudflare records for dnscontrol.
+- `<work_dir>/netbox-dns-records.json`: Raw DNS records fetched from NetBox.
+- `external_records.json`: Cloudflare records for dnscontrol.
 
 ## Usage
 
