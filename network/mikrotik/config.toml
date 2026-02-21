@@ -16,12 +16,20 @@ limit = 200
 
 # API Endpoints
 security_endpoint = "/api/plugins/netbox-security/addresses/"
-address_sets_endpoint = "/api/plugins/netbox-security/address-sets/"
+addresssets_endpoint = "/api/plugins/netbox-security/address-sets/"
 
 # Custom Field Names
 backref_field = "ipam_backref"
-address_set_backref_field = "ipam_backref"
-automation_key_field = "automation_key"
+disable_sync_field = "disable_security_sync"
+
+# Tags
+managed_tag = "managed-by-script"
+role_caddy_tag = "role:caddy-proxy"
+role_subnet_router_tag = "role:tailscale-subnet-router"
+
+# Behavior
+require_service_ip_binding = false
+strict = false
 
 # Execution Flags (defaults)
 apply = false
@@ -30,105 +38,3 @@ show_payload = false
 show_http_request = false
 suppress_insecure_warning = true
 debug = false
-
-# ============================================================================
-# Managed Tags - Safety Fence (AND logic)
-# ============================================================================
-# These tags MUST be present on ALL objects processed by the script.
-# This prevents accidentally syncing manually-created or unrelated objects.
-# 
-# Recommendation:
-#   - "managed-by-script" = clearly marks automation-managed objects
-#   - "scope-hexs" = limits to hEX S router scope (add scope-fortmill later if needed)
-#   - "source-routeros" = indicates data sourced from RouterOS (vs Cloudflare, AWS, etc.)
-#
-# All IPAM IP Addresses, Services, and Devices MUST have ALL these tags to be processed.
-# ============================================================================
-managed_tags_all = [
-  "managed-by-script",
-  "scope-hexs",
-]
-
-# Optional: Add source tag for future multi-source scenarios
-# managed_tags_all = ["managed-by-script", "scope-hexs", "source-routeros"]
-
-# ============================================================================
-# Address Set Mappings
-# ============================================================================
-# Each entry defines how to build a Security Address Set from IPAM objects.
-#
-# Fields:
-#   - intent_tags_any: List of tags (OR logic) that select objects for this set
-#   - address_set: Name of the Security Address Set to create/update
-#   - sources: List of sources to pull from (["services"], ["devices"], or ["services", "devices"])
-#   - automation_key: Stable identifier for this set (allows renaming without losing sync)
-#   - description: Human-readable description (optional)
-#
-# How it works:
-#   1. Script fetches objects matching ANY intent tag (OR)
-#   2. AND filters by ALL managed_tags_all
-#   3. Extracts IP addresses from matching objects
-#   4. Creates/updates Security Address Set with those IPs
-# ============================================================================
-
-[[ipam_to_security.address_sets]]
-intent_tags_any = ["pathvia-caddy"]
-address_set = "caddy-access-services"
-sources = ["services"]
-automation_key = "set:caddy-access"
-description = "Services accessible via Caddy reverse proxy"
-
-[[ipam_to_security.address_sets]]
-intent_tags_any = ["svcbind"]
-address_set = "bind-server"
-sources = ["services"]
-automation_key = "set:bind-dns"
-description = "BIND DNS server services"
-
-[[ipam_to_security.address_sets]]
-intent_tags_any = ["svcpihole"]
-address_set = "pihole-services"
-sources = ["services"]
-automation_key = "set:pihole-dns"
-description = "Pi-hole DNS/DHCP services"
-
-[[ipam_to_security.address_sets]]
-intent_tags_any = ["svcminecraft"]
-address_set = "minecraft-server"
-sources = ["services"]
-automation_key = "set:minecraft"
-description = "Minecraft game server"
-
-[[ipam_to_security.address_sets]]
-intent_tags_any = ["svcmumble"]
-address_set = "mumble-server"
-sources = ["services"]
-automation_key = "set:mumble-voip"
-description = "Mumble VoIP server"
-
-[[ipam_to_security.address_sets]]
-intent_tags_any = ["monping"]
-address_set = "monitor-ping-targets"
-sources = ["services", "devices"]
-automation_key = "set:monitoring-ping"
-description = "Targets for ICMP ping monitoring"
-
-[[ipam_to_security.address_sets]]
-intent_tags_any = ["monhttp"]
-address_set = "monitor-http-targets"
-sources = ["services"]
-automation_key = "set:monitoring-http"
-description = "Targets for HTTP/HTTPS monitoring"
-
-# ============================================================================
-# Example: Multi-tag intent (OR logic across multiple tags)
-# ============================================================================
-# This demonstrates selecting objects with EITHER tag.
-# Useful for grouping related services or transitioning tag naming schemes.
-#
-# [[ipam_to_security.address_sets]]
-# intent_tags_any = ["app-caddy", "app-caddy-backend"]
-# address_set = "all-caddy-services"
-# sources = ["services"]
-# automation_key = "set:caddy-all"
-# description = "All Caddy-related services (frontend and backend)"
