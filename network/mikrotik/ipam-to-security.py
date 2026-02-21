@@ -14,6 +14,16 @@ import requests
 import tomllib
 import urllib3
 
+# NetBox API endpoints (relative to base_url)
+IPAM_IP_ADDRESSES_ENDPOINT = "/api/ipam/ip-addresses/"
+IPAM_SERVICES_ENDPOINT = "/api/ipam/services/"
+EXTRAS_TAGS_ENDPOINT = "/api/extras/tags/"
+VMS_ENDPOINT = "/api/virtualization/virtual-machines/"
+DEVICES_ENDPOINT = "/api/dcim/devices/"
+
+SECURITY_ADDRESSES_ENDPOINT = "/api/plugins/netbox-security/addresses/"
+SECURITY_ADDRESSSETS_ENDPOINT = "/api/plugins/netbox-security/address-sets/"
+
 
 def load_config(path: str, debug: bool) -> dict[str, Any]:
     if debug:
@@ -26,23 +36,16 @@ def load_config(path: str, debug: bool) -> dict[str, Any]:
 
 
 def build_ipam_url(base_url: str, debug: bool) -> str:
-    url = f"{base_url.rstrip('/')}/api/ipam/ip-addresses/"
+    url = f"{base_url.rstrip('/')}{IPAM_IP_ADDRESSES_ENDPOINT}"
     if debug:
         print(f"[debug] Built NetBox URL: {url}", file=sys.stderr)
     return url
 
 
-def build_ipam_services_url(base_url: str, debug: bool) -> str:
-    url = f"{base_url.rstrip('/')}/api/ipam/services/"
+def build_api_url(base_url: str, endpoint: str, debug: bool) -> str:
+    url = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
     if debug:
-        print(f"[debug] Built NetBox services URL: {url}", file=sys.stderr)
-    return url
-
-
-def build_devices_url(base_url: str, debug: bool) -> str:
-    url = f"{base_url.rstrip('/')}/api/dcim/devices/"
-    if debug:
-        print(f"[debug] Built NetBox devices URL: {url}", file=sys.stderr)
+        print(f"[debug] Built NetBox URL: {url}", file=sys.stderr)
     return url
 
 
@@ -77,10 +80,13 @@ def request_json(
     payload: dict[str, Any] | None,
     debug: bool,
     show_http_request: bool,
+    session: requests.Session | None = None,
 ) -> Any:
     if debug:
         print(f"[debug] Requesting {method} {url} params={params}", file=sys.stderr)
-    session = requests.Session()
+    owns_session = session is None
+    if session is None:
+        session = requests.Session()
     request = requests.Request(
         method,
         url,
@@ -91,7 +97,20 @@ def request_json(
     prepared = session.prepare_request(request)
     if show_http_request:
         dump_prepared_request(prepared)
-    response = session.send(prepared, timeout=30, verify=False)
+    try:
+        response = session.send(prepared, timeout=30, verify=False)
+    finally:
+        if owns_session:
+            session.close()
+
+    if response.status_code >= 400 and (debug or show_http_request):
+        print(
+            f"[http] Response {response.status_code} {response.reason} for {prepared.method} {prepared.url}",
+            file=sys.stderr,
+        )
+        body_text = response.text
+        if body_text:
+            print(body_text, file=sys.stderr)
     response.raise_for_status()
     if response.status_code == 204:
         return None
@@ -104,6 +123,7 @@ def fetch_all_records(
     params: dict[str, str],
     debug: bool,
     show_http_request: bool,
+    session: requests.Session | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     next_url: str | None = url
@@ -118,6 +138,7 @@ def fetch_all_records(
             None,
             debug,
             show_http_request,
+            session=session,
         )
         
         if isinstance(payload, list):
@@ -143,68 +164,16 @@ def fetch_all_records(
     return records
 
 
-def fetch_records_with_tags(
-    url: str,
-    headers: dict[str, str],
-    base_params: dict[str, str],
-    tags: list[str],
-    debug: bool,
-    show_http_request: bool,
-) -> list[dict[str, Any]]:
-    """Fetch records matching multiple tags (AND logic)."""
-    params = base_params.copy()
-    
-    # NetBox API supports multiple tag filters with AND logic
-    # Each tag parameter adds an additional filter
-    for tag in tags:
-        # Use repeated 'tag' parameter for AND logic
-        if 'tag' in params:
-            # If tag already exists, we need to handle this differently
-            # For now, we'll build a comma-separated list (NetBox supports this)
-            existing = params['tag']
-            params['tag'] = f"{existing},{tag}"
-        else:
-            params['tag'] = tag
-    
-    if debug:
-        print(f"[debug] Fetching with tags (AND): {tags}", file=sys.stderr)
-    
-    return fetch_all_records(url, headers, params, debug, show_http_request)
-
-
-def fetch_records_with_any_tags(
-    url: str,
-    headers: dict[str, str],
-    base_params: dict[str, str],
-    tags: list[str],
-    debug: bool,
-    show_http_request: bool,
-) -> list[dict[str, Any]]:
-    """Fetch records matching any of the provided tags (OR logic)."""
-    if not tags:
-        return []
-    
-    if debug:
-        print(f"[debug] Fetching with tags (OR): {tags}", file=sys.stderr)
-    
-    # Fetch for each tag and deduplicate by ID
-    all_records: dict[int, dict[str, Any]] = {}
-    
-    for tag in tags:
-        params = base_params.copy()
-        params['tag'] = tag
-        
-        records = fetch_all_records(url, headers, params, debug, show_http_request)
-        
-        for record in records:
-            record_id = record.get('id')
-            if isinstance(record_id, int):
-                all_records[record_id] = record
-    
-    if debug:
-        print(f"[debug] Fetched {len(all_records)} unique records across {len(tags)} tags", file=sys.stderr)
-    
-    return list(all_records.values())
+def get_config_table(config: dict[str, Any]) -> dict[str, Any]:
+    # Back-compat: accept multiple spellings.
+    for key in ("ipam_to_security", "ipamtosecurity", "ipam-to-security"):
+        table = config.get(key)
+        if table is None:
+            continue
+        if isinstance(table, dict):
+            return table
+        raise RuntimeError(f"Config {key} must be a table.")
+    return {}
 
 
 def canonicalize_ipam_backref(value: str) -> str:
@@ -239,22 +208,36 @@ def build_backref(record: dict[str, Any], base_url: str) -> str | None:
     return None
 
 
-def extract_automation_key(record: dict[str, Any], key_field: str) -> str | None:
-    """Extract automation_key from custom fields."""
-    custom_fields = record.get("custom_fields", {})
-    if isinstance(custom_fields, dict):
-        value = custom_fields.get(key_field)
-        if isinstance(value, str) and value:
-            return value
+def parse_boolish(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off", ""}:
+            return False
     return None
+
+
+def is_security_sync_disabled(record: dict[str, Any], disable_field: str) -> bool:
+    custom_fields = record.get("custom_fields")
+    if not isinstance(custom_fields, dict):
+        return False
+    value = custom_fields.get(disable_field)
+    parsed = parse_boolish(value)
+    return parsed is True
 
 
 def build_security_payload(
     record: dict[str, Any],
     backref_field: str,
-    automation_key_field: str,
     base_url: str,
     debug: bool,
+    managed_slug: str,
+    existing_security_record: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     address = record.get("address")
     if not isinstance(address, str) or not address:
@@ -286,14 +269,16 @@ def build_security_payload(
         "address": address,
         "custom_fields": {backref_field: backref},
     }
+
+    if existing_security_record is None:
+        payload["tags"] = [{"slug": managed_slug}]
+    else:
+        payload["tags"] = tags_payload_from_slugs(
+            merged_tag_list(existing_security_record, managed_slug)
+        )
     
     if dns_name:
         payload["dns_name"] = dns_name
-    
-    # Add automation_key if present in source record
-    automation_key = extract_automation_key(record, automation_key_field)
-    if automation_key:
-        payload["custom_fields"][automation_key_field] = automation_key
     
     return payload
 
@@ -335,265 +320,270 @@ def extract_backref_value(
     return None
 
 
-def parse_service_address_sets(
-    config_section: dict[str, Any], debug: bool
-) -> list[dict[str, Any]]:
-    raw_sets = config_section.get("address_sets")
-    if raw_sets is None:
-        raw_sets = config_section.get("service_address_sets", [])
-    if raw_sets is None:
+def normalize_tag_slugs(tags_value: Any) -> list[str]:
+    if not tags_value:
         return []
-    
-    if not isinstance(raw_sets, list):
-        raise ValueError("ipam_to_security.address_sets must be a list")
-    
-    mappings: list[dict[str, Any]] = []
-    for entry in raw_sets:
-        if not isinstance(entry, dict):
-            raise ValueError("address_sets entries must be tables")
-        
-        # Support legacy 'tag' field or new 'intent_tags_any'
-        intent_tags = entry.get("intent_tags_any") or entry.get("intent_tags")
-        if intent_tags is None:
-            # Fall back to legacy single tag
-            legacy_tag = entry.get("tag") or entry.get("tag_slug")
-            if legacy_tag:
-                intent_tags = [legacy_tag]
-            else:
-                intent_tags = []
-        
-        if isinstance(intent_tags, str):
-            intent_tags = [intent_tags]
-        
-        if not isinstance(intent_tags, list):
-            raise ValueError("intent_tags_any must be a list or string")
-        
-        name = entry.get("address_set") or entry.get("name")
-        sources = entry.get("sources") or entry.get("source")
-        automation_key = entry.get("automation_key")
-        description = entry.get("description", "")
-        
-        if not intent_tags or not name:
-            raise ValueError("address_sets entries require intent_tags_any and address_set/name")
-        
-        if sources is None:
-            sources = ["services", "devices"]
-        
-        if isinstance(sources, str):
-            sources = [sources]
-        
-        if not isinstance(sources, list):
-            raise ValueError("address_sets sources must be a list")
-        
-        normalized_sources = [str(item).strip().lower() for item in sources if item]
-        normalized_tags = [str(tag).strip() for tag in intent_tags if tag]
-        
-        mapping = {
-            "intent_tags": normalized_tags,
-            "name": str(name),
-            "sources": normalized_sources,
-            "description": str(description) if description else "",
-        }
-        
-        if automation_key:
-            mapping["automation_key"] = str(automation_key)
-        
-        mappings.append(mapping)
-    
-    if debug:
-        print(
-            f"[debug] Loaded {len(mappings)} service address set mappings",
-            file=sys.stderr,
+    if isinstance(tags_value, list):
+        slugs: list[str] = []
+        for item in tags_value:
+            if isinstance(item, str) and item:
+                slugs.append(item)
+            elif isinstance(item, dict):
+                slug = item.get("slug")
+                if isinstance(slug, str) and slug:
+                    slugs.append(slug)
+        return slugs
+    return []
+
+
+def tags_payload_from_slugs(slugs: list[str]) -> list[dict[str, str]]:
+    # Some NetBox plugin endpoints require tags as related objects (dicts), not raw slugs.
+    return [{"slug": slug} for slug in slugs if isinstance(slug, str) and slug]
+
+
+def merged_tag_list(existing_record: dict[str, Any], managed_slug: str) -> list[str]:
+    existing_slugs = normalize_tag_slugs(existing_record.get("tags"))
+    union = set(existing_slugs)
+    union.add(managed_slug)
+    return sorted(union)
+
+
+def resolve_tag_slug(
+    tag_name: str,
+    base_url: str,
+    headers: dict[str, str],
+    debug: bool,
+    show_http_request: bool,
+    cache: dict[str, str],
+    session: requests.Session,
+) -> str:
+    if tag_name in cache:
+        return cache[tag_name]
+
+    url = build_api_url(base_url, EXTRAS_TAGS_ENDPOINT, debug)
+    params = {"name": tag_name, "limit": "200"}
+    payload = request_json(
+        "GET",
+        url,
+        headers,
+        params,
+        None,
+        debug,
+        show_http_request,
+        session=session,
+    )
+
+    results: list[Any] = []
+    if isinstance(payload, dict):
+        maybe_results = payload.get("results")
+        if isinstance(maybe_results, list):
+            results = maybe_results
+    elif isinstance(payload, list):
+        results = payload
+
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        slug = item.get("slug")
+        name = item.get("name")
+        if name == tag_name and isinstance(slug, str) and slug:
+            cache[tag_name] = slug
+            if debug:
+                print(f"[debug] Resolved tag '{tag_name}' -> slug '{slug}'", file=sys.stderr)
+            return slug
+
+    raise RuntimeError(f"Tag not found: {tag_name}")
+
+
+def collect_primary_ip4_by_tag(
+    base_url: str,
+    headers: dict[str, str],
+    limit: int,
+    tag_slug: str,
+    strict: bool,
+    debug: bool,
+    show_http_request: bool,
+    session: requests.Session,
+) -> set[str]:
+    params = {"tag": tag_slug, "limit": str(limit)}
+    endpoints = (VMS_ENDPOINT, DEVICES_ENDPOINT)
+    ips: set[str] = set()
+
+    for endpoint in endpoints:
+        url = build_api_url(base_url, endpoint, debug)
+        records = fetch_all_records(
+            url,
+            headers,
+            params,
+            debug,
+            show_http_request,
+            session=session,
         )
-    
-    return mappings
+        for record in records:
+            record_id = record.get("id")
+            primary = record.get("primary_ip4")
+            if isinstance(primary, dict):
+                addr = primary.get("address")
+                if isinstance(addr, str) and addr:
+                    ips.add(normalize_security_address(addr, debug, record_id))
+                    continue
+
+            if strict:
+                name = record.get("name")
+                display = name if isinstance(name, str) else str(record_id)
+                raise RuntimeError(
+                    f"Missing primary_ip4.address for tagged object '{display}' (tag={tag_slug})"
+                )
+            if debug:
+                name = record.get("name")
+                display = name if isinstance(name, str) else str(record_id)
+                print(
+                    f"[debug] Skipping tagged object without primary_ip4.address: {display}",
+                    file=sys.stderr,
+                )
+
+    return ips
 
 
-def build_tag_backref(tags: list[str]) -> str:
-    """Build backref for address set based on intent tags."""
-    # Use first tag for backref (legacy compatibility)
-    if tags:
-        return f"/api/extras/tags/?slug={urllib.parse.quote(tags[0])}"
-    return ""
+def build_desired_dest_sets(
+    services: list[dict[str, Any]],
+    require_service_ip_binding: bool,
+    strict: bool,
+    debug: bool,
+) -> dict[str, set[str]]:
+    desired: dict[str, set[str]] = {}
+    for service in services:
+        service_id = service.get("id")
+        custom_fields = service.get("custom_fields")
+        if not isinstance(custom_fields, dict):
+            custom_fields = {}
+
+        ingress = custom_fields.get("ingress")
+        exposure = custom_fields.get("exposure")
+
+        if not isinstance(ingress, str) or not ingress:
+            msg = f"Service missing custom_fields.ingress: {service_id}"
+            if strict:
+                raise RuntimeError(msg)
+            if debug:
+                print(f"[debug] {msg}", file=sys.stderr)
+            continue
+        if not isinstance(exposure, str) or not exposure:
+            msg = f"Service missing custom_fields.exposure: {service_id}"
+            if strict:
+                raise RuntimeError(msg)
+            if debug:
+                print(f"[debug] {msg}", file=sys.stderr)
+            continue
+
+        protocol = service.get("protocol")
+        proto = None
+        if isinstance(protocol, dict):
+            value = protocol.get("value")
+            if isinstance(value, str) and value:
+                proto = value
+        if not proto:
+            msg = f"Service missing protocol.value: {service_id}"
+            if strict:
+                raise RuntimeError(msg)
+            if debug:
+                print(f"[debug] {msg}", file=sys.stderr)
+            continue
+
+        ports = service.get("ports")
+        if not isinstance(ports, list) or not ports:
+            msg = f"Service missing ports: {service_id}"
+            if strict:
+                raise RuntimeError(msg)
+            if debug:
+                print(f"[debug] {msg}", file=sys.stderr)
+            continue
+
+        ipaddresses = service.get("ipaddresses")
+        if not isinstance(ipaddresses, list):
+            ipaddresses = []
+        if require_service_ip_binding and not ipaddresses:
+            msg = f"Service has no bound ipaddresses: {service_id}"
+            if strict:
+                raise RuntimeError(msg)
+            if debug:
+                print(f"[debug] {msg}", file=sys.stderr)
+            continue
+
+        member_ips: list[str] = []
+        for ip_obj in ipaddresses:
+            if not isinstance(ip_obj, dict):
+                continue
+            addr = ip_obj.get("address")
+            if isinstance(addr, str) and addr:
+                member_ips.append(normalize_security_address(addr, debug, service_id))
+
+        for port in ports:
+            setname = f"as_{exposure}_{ingress}_{proto}_{port}"
+            desired.setdefault(setname, set()).update(member_ips)
+
+    return desired
 
 
-def build_address_set_payload(
+def build_security_address_maps(
+    security_records: list[dict[str, Any]],
+    debug: bool,
+) -> tuple[dict[str, dict[str, Any]], dict[str, int]]:
+    by_address: dict[str, dict[str, Any]] = {}
+    id_by_address: dict[str, int] = {}
+    for record in security_records:
+        address = record.get("address")
+        if not isinstance(address, str) or not address:
+            continue
+        normalized = normalize_security_address(address, debug, record.get("id"))
+        record_id = record.get("id")
+        if isinstance(record_id, int):
+            by_address[normalized] = record
+            id_by_address[normalized] = record_id
+    return by_address, id_by_address
+
+
+def extract_existing_addressset_member_ids(record: dict[str, Any]) -> list[int]:
+    addresses = record.get("addresses")
+    ids: list[int] = []
+    if isinstance(addresses, list):
+        for item in addresses:
+            if isinstance(item, int):
+                ids.append(item)
+            elif isinstance(item, dict):
+                item_id = item.get("id")
+                if isinstance(item_id, int):
+                    ids.append(item_id)
+    return sorted(set(ids))
+
+
+def build_addressset_payload(
     name: str,
-    address_ids: list[int],
-    backref_field: str,
-    automation_key_field: str,
-    backref_value: str,
-    automation_key: str | None,
-    description: str,
+    member_ids: list[int],
+    managed_slug: str,
+    existing_record: dict[str, Any] | None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "name": name,
-        "addresses": sorted(set(address_ids)),
+        "addresses": member_ids,
     }
-    
-    if description:
-        payload["description"] = description
-    
-    custom_fields = {}
-    if backref_value:
-        custom_fields[backref_field] = backref_value
-    
-    if automation_key:
-        custom_fields[automation_key_field] = automation_key
-    
-    if custom_fields:
-        payload["custom_fields"] = custom_fields
-    
+    if existing_record is None:
+        payload["address_sets"] = []
+        payload["description"] = "managed-by-script"
+        payload["tags"] = [{"slug": managed_slug}]
+    else:
+        payload["tags"] = tags_payload_from_slugs(
+            merged_tag_list(existing_record, managed_slug)
+        )
+        desc = existing_record.get("description")
+        if not isinstance(desc, str) or not desc.strip():
+            payload["description"] = "managed-by-script"
     return payload
-
-
-def extract_service_ipaddresses(
-    service: dict[str, Any], debug: bool
-) -> list[dict[str, Any]]:
-    ipaddresses = service.get("ipaddresses", [])
-    if not isinstance(ipaddresses, list):
-        if debug:
-            print(
-                f"[debug] Service {service.get('id')} ipaddresses not a list",
-                file=sys.stderr,
-            )
-        return []
-    
-    if debug:
-        print(
-            f"[debug] Service {service.get('id')} has {len(ipaddresses)} ipaddresses",
-            file=sys.stderr,
-        )
-    
-    return [item for item in ipaddresses if isinstance(item, dict)]
-
-
-def extract_device_ipaddresses(
-    device: dict[str, Any], debug: bool
-) -> list[dict[str, Any]]:
-    ip_records: list[dict[str, Any]] = []
-    
-    for key in ("primary_ip4", "primary_ip6", "primary_ip"):
-        value = device.get(key)
-        if isinstance(value, dict):
-            ip_records.append(value)
-    
-    if debug:
-        print(
-            f"[debug] Device {device.get('id')} resolved {len(ip_records)} primary IPs",
-            file=sys.stderr,
-        )
-    
-    return ip_records
-
-
-def get_security_address_id(
-    record: dict[str, Any],
-    existing_by_backref: dict[str, dict[str, Any]],
-    existing_by_automation_key: dict[str, dict[str, Any]],
-    backref_field: str,
-    automation_key_field: str,
-    base_url: str,
-    security_url: str,
-    headers: dict[str, str],
-    apply_changes: bool,
-    show_payload: bool,
-    debug: bool,
-    show_http_request: bool,
-) -> int | None:
-    payload = build_security_payload(
-        record, backref_field, automation_key_field, base_url, debug
-    )
-    if payload is None:
-        return None
-    
-    backref_value = None
-    automation_key = None
-    custom_fields = payload.get("custom_fields")
-    if isinstance(custom_fields, dict):
-        value = custom_fields.get(backref_field)
-        if isinstance(value, str) and value:
-            backref_value = value
-        
-        key_value = custom_fields.get(automation_key_field)
-        if isinstance(key_value, str) and key_value:
-            automation_key = key_value
-    
-    # Try to find existing record by backref first (primary match)
-    existing = None
-    if backref_value:
-        existing = existing_by_backref.get(backref_value)
-        if existing:
-            if debug:
-                print(
-                    f"[debug] Matched by backref: {backref_value}",
-                    file=sys.stderr,
-                )
-    
-    # Fall back to automation_key if no backref match
-    if not existing and automation_key:
-        existing = existing_by_automation_key.get(automation_key)
-        if existing:
-            if debug:
-                print(
-                    f"[debug] Matched by automation_key: {automation_key}",
-                    file=sys.stderr,
-                )
-    
-    if existing:
-        record_id = existing.get("id")
-        if isinstance(record_id, int):
-            return record_id
-        if debug:
-            print(
-                f"[debug] Existing Security address missing id",
-                file=sys.stderr,
-            )
-        return None
-    
-    if not apply_changes:
-        if debug:
-            print(
-                "[debug] Not creating Security address (apply disabled)",
-                file=sys.stderr,
-            )
-        return None
-    
-    if debug:
-        print(
-            f"[debug] Creating Security address for {payload.get('address')}",
-            file=sys.stderr,
-        )
-    
-    if show_payload:
-        print(f"PAYLOAD\tCREATE\t{json.dumps(payload, sort_keys=True)}")
-    
-    created = request_json(
-        "POST",
-        security_url,
-        headers,
-        None,
-        payload,
-        debug,
-        show_http_request,
-    )
-    
-    if isinstance(created, dict):
-        if backref_value:
-            existing_by_backref[backref_value] = created
-        if automation_key:
-            existing_by_automation_key[automation_key] = created
-        
-        record_id = created.get("id")
-        if isinstance(record_id, int):
-            return record_id
-    
-    return None
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Sync NetBox IPAM objects to Security module with managed tags and automation keys."
+        description="Sync NetBox IPAM IP Addresses to Security Addresses with backreferences."
     )
     parser.add_argument(
         "--config",
@@ -620,19 +610,22 @@ def main() -> int:
         help="Custom field name used to store IPAM backref (default: %(default)s)",
     )
     parser.add_argument(
-        "--automation-key-field",
-        default="automation_key",
-        help="Custom field name for stable automation identity (default: %(default)s)",
+        "--disable-sync-field",
+        default="disable_security_sync",
+        help=(
+            "NetBox IP Address custom field name (boolean) which disables syncing when true "
+            "(default: %(default)s)"
+        ),
     )
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Create/update NetBox Security addresses and address sets",
+        help="Create/update NetBox Security addresses",
     )
     parser.add_argument(
         "--update",
         action="store_true",
-        help="Update existing Security addresses when backref/automation_key matches",
+        help="Update existing Security addresses when backref matches",
     )
     parser.add_argument(
         "--show-payload",
@@ -643,6 +636,46 @@ def main() -> int:
         "--show-http-request",
         action="store_true",
         help="Print full HTTP requests sent to NetBox",
+    )
+
+    parser.add_argument(
+        "--addresssets-endpoint",
+        default=None,
+        help=(
+            "Security address-sets API endpoint (default: config or "
+            "/api/plugins/netbox-security/address-sets/)"
+        ),
+    )
+    parser.add_argument(
+        "--managed-tag",
+        default="managed-by-script",
+        help="Tag name to enforce on created/updated Security objects",
+    )
+    parser.add_argument(
+        "--role-caddy-tag",
+        default="role:caddy-proxy",
+        help="Tag name identifying Caddy proxy nodes",
+    )
+    parser.add_argument(
+        "--role-subnet-router-tag",
+        default="role:tailscale-subnet-router",
+        help="Tag name identifying Tailscale subnet router nodes",
+    )
+    parser.add_argument(
+        "--require-service-ip-binding",
+        action="store_true",
+        help=(
+            "Require IPAM Services to have bound IP addresses (service.ipaddresses). "
+            "When set, services without bindings are skipped; with --strict they fail the run."
+        ),
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Treat missing/invalid source data as a fatal error (recommended for firewall automation). "
+            "Without this flag, the script skips problematic records with debug logging."
+        ),
     )
     parser.add_argument(
         "--suppress-insecure-warning",
@@ -658,18 +691,16 @@ def main() -> int:
     args = parser.parse_args()
     
     config = load_config(args.config, args.debug)
-    ipam_to_security_config = config.get("ipam_to_security", {})
-    if ipam_to_security_config is None:
-        ipam_to_security_config = {}
-    
-    if not isinstance(ipam_to_security_config, dict):
-        print("Config ipam_to_security must be a table.", file=sys.stderr)
+    try:
+        ipam_to_security_config = get_config_table(config)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
     
     # Load config defaults
     default_limit = parser.get_default("limit")
     default_backref_field = parser.get_default("backref_field")
-    default_automation_key_field = parser.get_default("automation_key_field")
+    default_disable_sync_field = parser.get_default("disable_sync_field")
     
     config_limit = ipam_to_security_config.get("limit")
     if isinstance(config_limit, int) and args.limit == default_limit:
@@ -678,28 +709,28 @@ def main() -> int:
     config_backref_field = ipam_to_security_config.get("backref_field")
     if isinstance(config_backref_field, str) and args.backref_field == default_backref_field:
         args.backref_field = config_backref_field
-    
-    config_automation_key_field = ipam_to_security_config.get("automation_key_field")
-    if isinstance(config_automation_key_field, str) and args.automation_key_field == default_automation_key_field:
-        args.automation_key_field = config_automation_key_field
-    
-    # Load managed_tags_all
-    managed_tags_all = ipam_to_security_config.get("managed_tags_all", [])
-    if isinstance(managed_tags_all, str):
-        managed_tags_all = [managed_tags_all]
-    if not isinstance(managed_tags_all, list):
-        print("Config managed_tags_all must be a list.", file=sys.stderr)
-        return 2
-    
-    managed_tags_all = [str(tag).strip() for tag in managed_tags_all if tag]
-    
-    if not managed_tags_all:
-        print(
-            "WARNING: No managed_tags_all configured. Script will process ALL objects.",
-            file=sys.stderr,
-        )
-    
-    # Load boolean flags from config
+
+    config_disable_sync_field = (
+        ipam_to_security_config.get("disable_sync_field")
+        or ipam_to_security_config.get("disable_security_sync_field")
+    )
+    if isinstance(config_disable_sync_field, str) and args.disable_sync_field == default_disable_sync_field:
+        args.disable_sync_field = config_disable_sync_field
+
+    # String defaults from config
+    for key in (
+        "managed_tag",
+        "role_caddy_tag",
+        "role_subnet_router_tag",
+        "addresssets_endpoint",
+    ):
+        config_value = ipam_to_security_config.get(key)
+        if isinstance(config_value, str) and config_value:
+            current = getattr(args, key, None)
+            if current == parser.get_default(key):
+                setattr(args, key, config_value)
+
+    # Booleans that can be made true by config
     for flag_name in (
         "apply",
         "update",
@@ -707,6 +738,8 @@ def main() -> int:
         "show_http_request",
         "suppress_insecure_warning",
         "debug",
+        "require_service_ip_binding",
+        "strict",
     ):
         if not getattr(args, flag_name):
             value = ipam_to_security_config.get(flag_name)
@@ -732,122 +765,170 @@ def main() -> int:
         args.security_endpoint
         or ipam_to_security_config.get("security_endpoint")
         or config.get("netbox_security_addresses_endpoint")
-        or "/api/plugins/netbox-security/addresses/"
+        or SECURITY_ADDRESSES_ENDPOINT
     )
     security_url = build_security_url(base_url, security_endpoint, args.debug)
+
+    addresssets_endpoint = (
+        args.addresssets_endpoint
+        or ipam_to_security_config.get("addresssets_endpoint")
+        or ipam_to_security_config.get("address_sets_endpoint")
+        or config.get("netbox_security_address_sets_endpoint")
+        or SECURITY_ADDRESSSETS_ENDPOINT
+    )
+    addresssets_url = build_security_url(base_url, addresssets_endpoint, args.debug)
     
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Accept": "application/json",
     }
+
+    # Resolve tag slugs at startup
+    session = requests.Session()
+    tag_cache: dict[str, str] = {}
+    try:
+        managed_slug = resolve_tag_slug(
+            args.managed_tag,
+            base_url,
+            headers,
+            args.debug,
+            args.show_http_request,
+            tag_cache,
+            session,
+        )
+        role_caddy_slug = resolve_tag_slug(
+            args.role_caddy_tag,
+            base_url,
+            headers,
+            args.debug,
+            args.show_http_request,
+            tag_cache,
+            session,
+        )
+        role_subnet_router_slug = resolve_tag_slug(
+            args.role_subnet_router_tag,
+            base_url,
+            headers,
+            args.debug,
+            args.show_http_request,
+            tag_cache,
+            session,
+        )
+    except (requests.RequestException, RuntimeError) as exc:
+        print(f"Tag resolution failed: {exc}", file=sys.stderr)
+        session.close()
+        return 1
     
     base_params: dict[str, str] = {
         "limit": str(args.limit),
     }
     
-    # Fetch IPAM records with managed_tags_all filter
+    # =========================
+    # Phase A: Sync Addresses
+    # =========================
     try:
-        if managed_tags_all:
-            ipam_records = fetch_records_with_tags(
-                ipam_url, headers, base_params, managed_tags_all, args.debug, args.show_http_request
-            )
-        else:
-            ipam_records = fetch_all_records(
-                ipam_url, headers, base_params, args.debug, args.show_http_request
-            )
+        ipam_records = fetch_all_records(
+            ipam_url,
+            headers,
+            base_params,
+            args.debug,
+            args.show_http_request,
+            session=session,
+        )
     except requests.RequestException as exc:
         print(f"IPAM request failed: {exc}", file=sys.stderr)
+        session.close()
         return 1
     except RuntimeError as exc:
         print(f"Unexpected IPAM response: {exc}", file=sys.stderr)
+        session.close()
         return 1
-    
-    # Fetch existing Security addresses
-    security_params: dict[str, str] = {
-        "limit": str(args.limit),
-    }
-    
+
+    security_params: dict[str, str] = {"limit": str(args.limit)}
     try:
         security_records = fetch_all_records(
-            security_url, headers, security_params, args.debug, args.show_http_request
+            security_url,
+            headers,
+            security_params,
+            args.debug,
+            args.show_http_request,
+            session=session,
         )
     except requests.RequestException as exc:
         print(f"Security request failed: {exc}", file=sys.stderr)
+        session.close()
         return 1
     except RuntimeError as exc:
         print(f"Unexpected security response: {exc}", file=sys.stderr)
+        session.close()
         return 1
-    
-    # Build lookup tables for existing Security addresses
+
     existing_by_backref: dict[str, dict[str, Any]] = {}
-    existing_by_automation_key: dict[str, dict[str, Any]] = {}
-    
     for record in security_records:
         backref_value = extract_backref_value(record, args.backref_field, base_url)
         if backref_value:
             existing_by_backref[backref_value] = record
-        
-        automation_key = extract_automation_key(record, args.automation_key_field)
-        if automation_key:
-            existing_by_automation_key[automation_key] = record
-    
+
     if args.debug:
         print(
-            f"[debug] Loaded {len(existing_by_backref)} Security addresses by backref, "
-            f"{len(existing_by_automation_key)} by automation_key",
+            f"[debug] Loaded {len(existing_by_backref)} Security addresses by backref",
             file=sys.stderr,
         )
-    
-    # Process individual IP addresses
+
     created = 0
     updated = 0
     skipped = 0
-    
+
     for record in ipam_records:
+        if args.disable_sync_field and is_security_sync_disabled(record, args.disable_sync_field):
+            skipped += 1
+            address = record.get("address")
+            dns_name = record.get("dns_name")
+            display = dns_name if isinstance(dns_name, str) and dns_name else ""
+            display = display or (address if isinstance(address, str) else "")
+            address_str = address if isinstance(address, str) else ""
+            print(f"SKIP\tDISABLED\t{display}\t{address_str}\t{record.get('id')}")
+            continue
+
+        backref_value = build_backref(record, base_url)
+        existing = existing_by_backref.get(backref_value) if backref_value else None
+
         payload = build_security_payload(
-            record, args.backref_field, args.automation_key_field, base_url, args.debug
+            record,
+            args.backref_field,
+            base_url,
+            args.debug,
+            managed_slug,
+            existing_security_record=existing,
         )
         if payload is None:
             skipped += 1
             continue
-        
-        backref_value = None
-        automation_key = None
-        custom_fields = payload.get("custom_fields")
-        if isinstance(custom_fields, dict):
-            value = custom_fields.get(args.backref_field)
-            if isinstance(value, str) and value:
-                backref_value = value
-            
-            key_value = custom_fields.get(args.automation_key_field)
-            if isinstance(key_value, str) and key_value:
-                automation_key = key_value
-        
-        # Check for existing record
-        existing = None
-        if backref_value:
-            existing = existing_by_backref.get(backref_value)
-        if not existing and automation_key:
-            existing = existing_by_automation_key.get(automation_key)
-        
+
+        # If existing is present but backref mismatch somehow, try to recompute from payload.
+        if not backref_value:
+            custom_fields = payload.get("custom_fields")
+            if isinstance(custom_fields, dict):
+                value = custom_fields.get(args.backref_field)
+                if isinstance(value, str) and value:
+                    backref_value = value
+
         if existing:
             if not args.update:
                 skipped += 1
-                print(f"SKIP\t{payload['name']}\t{payload['address']}\t{backref_value or automation_key}")
+                print(f"SKIP\t{payload['name']}\t{payload['address']}\t{backref_value}")
                 continue
-            
+
             target_url = existing.get("url")
             if not isinstance(target_url, str) or not target_url:
                 record_id = existing.get("id")
                 target_url = f"{security_url.rstrip('/')}/{record_id}/"
-            
+
             if args.apply:
                 try:
                     if args.show_payload:
-                        print(
-                            f"PAYLOAD\tUPDATE\t{json.dumps(payload, sort_keys=True)}"
-                        )
-                    
+                        print(f"PAYLOAD\tUPDATE\t{json.dumps(payload, sort_keys=True)}")
+
                     updated_record = request_json(
                         "PATCH",
                         target_url,
@@ -856,28 +937,24 @@ def main() -> int:
                         payload,
                         args.debug,
                         args.show_http_request,
+                        session=session,
                     )
-                    
-                    if isinstance(updated_record, dict):
-                        if backref_value:
-                            existing_by_backref[backref_value] = updated_record
-                        if automation_key:
-                            existing_by_automation_key[automation_key] = updated_record
-                
+                    if isinstance(updated_record, dict) and backref_value:
+                        existing_by_backref[backref_value] = updated_record
                 except requests.RequestException as exc:
                     print(f"Update failed: {exc}", file=sys.stderr)
+                    session.close()
                     return 1
-            
+
             updated += 1
-            print(f"UPDATE\t{payload['name']}\t{payload['address']}\t{backref_value or automation_key}")
+            print(f"UPDATE\t{payload['name']}\t{payload['address']}\t{backref_value}")
             continue
-        
+
         # Create new record
         if args.apply:
             try:
                 if args.show_payload:
                     print(f"PAYLOAD\tCREATE\t{json.dumps(payload, sort_keys=True)}")
-                
                 created_record = request_json(
                     "POST",
                     security_url,
@@ -886,391 +963,265 @@ def main() -> int:
                     payload,
                     args.debug,
                     args.show_http_request,
+                    session=session,
                 )
-                
-                if isinstance(created_record, dict):
-                    if backref_value:
-                        existing_by_backref[backref_value] = created_record
-                    if automation_key:
-                        existing_by_automation_key[automation_key] = created_record
-            
+                if isinstance(created_record, dict) and backref_value:
+                    existing_by_backref[backref_value] = created_record
             except requests.RequestException as exc:
                 print(f"Create failed: {exc}", file=sys.stderr)
+                session.close()
                 return 1
-        
+
         created += 1
-        print(f"CREATE\t{payload['name']}\t{payload['address']}\t{backref_value or automation_key}")
-    
-    # Process Address Sets
-    address_set_created = 0
-    address_set_updated = 0
-    address_set_skipped = 0
-    
-    try:
-        service_address_sets = parse_service_address_sets(
-            ipam_to_security_config, args.debug
-        )
-    except ValueError as exc:
-        print(f"Invalid service_address_sets configuration: {exc}", file=sys.stderr)
-        return 2
-    
-    if service_address_sets:
-        services_url = build_ipam_services_url(base_url, args.debug)
-        devices_url = build_devices_url(base_url, args.debug)
-        
-        address_sets_endpoint = (
-            ipam_to_security_config.get("address_sets_endpoint")
-            or config.get("netbox_security_address_sets_endpoint")
-            or "/api/plugins/netbox-security/address-sets/"
-        )
-        address_sets_url = build_security_url(
-            base_url, address_sets_endpoint, args.debug
-        )
-        
-        address_set_backref_field = (
-            ipam_to_security_config.get("address_set_backref_field")
-            or args.backref_field
-        )
-        
-        # Fetch existing address sets
+        print(f"CREATE\t{payload['name']}\t{payload['address']}\t{backref_value}")
+
+    print(f"Address Summary: created={created} updated={updated} skipped={skipped}")
+
+    # Re-fetch Security addresses after apply, so AddressSets can reference fresh IDs.
+    if args.apply and (created > 0 or updated > 0):
         try:
-            address_sets = fetch_all_records(
-                address_sets_url,
+            security_records = fetch_all_records(
+                security_url,
                 headers,
                 security_params,
                 args.debug,
                 args.show_http_request,
+                session=session,
             )
         except requests.RequestException as exc:
-            print(f"Address set request failed: {exc}", file=sys.stderr)
+            print(f"Security re-fetch failed: {exc}", file=sys.stderr)
+            session.close()
             return 1
         except RuntimeError as exc:
-            print(f"Unexpected address set response: {exc}", file=sys.stderr)
+            print(f"Unexpected security response: {exc}", file=sys.stderr)
+            session.close()
             return 1
-        
-        # Build lookup tables for address sets
-        existing_sets_by_backref: dict[str, dict[str, Any]] = {}
-        existing_sets_by_automation_key: dict[str, dict[str, Any]] = {}
-        existing_sets_by_name: dict[str, dict[str, Any]] = {}
-        
-        for record in address_sets:
-            backref_value = extract_backref_value(
-                record, address_set_backref_field, base_url
-            )
-            if backref_value:
-                existing_sets_by_backref[backref_value] = record
-            
-            automation_key = extract_automation_key(record, args.automation_key_field)
-            if automation_key:
-                existing_sets_by_automation_key[automation_key] = record
-            
-            name = record.get("name")
-            if isinstance(name, str) and name:
-                existing_sets_by_name[name] = record
-        
-        if args.debug:
-            print(
-                f"[debug] Loaded {len(existing_sets_by_backref)} Address Sets by backref, "
-                f"{len(existing_sets_by_automation_key)} by automation_key",
-                file=sys.stderr,
-            )
-        
-        # Process each address set mapping
-        for mapping in service_address_sets:
-            intent_tags = mapping["intent_tags"]
-            set_name = mapping["name"]
-            sources = mapping.get("sources") or []
-            automation_key = mapping.get("automation_key")
-            description = mapping.get("description", "")
-            
+
+    # =========================
+    # Phase B: Build AddressSets
+    # =========================
+    _, security_addr_id_by_address = build_security_address_maps(security_records, args.debug)
+
+    services_url = build_api_url(base_url, IPAM_SERVICES_ENDPOINT, args.debug)
+    try:
+        services = fetch_all_records(
+            services_url,
+            headers,
+            {"limit": str(args.limit)},
+            args.debug,
+            args.show_http_request,
+            session=session,
+        )
+    except requests.RequestException as exc:
+        print(f"Services request failed: {exc}", file=sys.stderr)
+        session.close()
+        return 1
+    except RuntimeError as exc:
+        print(f"Unexpected services response: {exc}", file=sys.stderr)
+        session.close()
+        return 1
+
+    try:
+        desired_dest_sets = build_desired_dest_sets(
+            services,
+            require_service_ip_binding=args.require_service_ip_binding,
+            strict=args.strict,
+            debug=args.debug,
+        )
+    except RuntimeError as exc:
+        print(f"AddressSet build failed: {exc}", file=sys.stderr)
+        session.close()
+        return 1
+
+    try:
+        caddy_ips = collect_primary_ip4_by_tag(
+            base_url,
+            headers,
+            args.limit,
+            role_caddy_slug,
+            args.strict,
+            args.debug,
+            args.show_http_request,
+            session,
+        )
+        subnet_router_ips = collect_primary_ip4_by_tag(
+            base_url,
+            headers,
+            args.limit,
+            role_subnet_router_slug,
+            args.strict,
+            args.debug,
+            args.show_http_request,
+            session,
+        )
+    except (requests.RequestException, RuntimeError) as exc:
+        print(f"Role IP collection failed: {exc}", file=sys.stderr)
+        session.close()
+        return 1
+
+    desired_src_sets: dict[str, set[str]] = {
+        "as_src_caddy_proxies": caddy_ips,
+        "as_src_trusted_tailnet_snat": subnet_router_ips,
+    }
+
+    desired_sets: dict[str, set[str]] = {}
+    desired_sets.update(desired_dest_sets)
+    desired_sets.update(desired_src_sets)
+
+    # =========================
+    # Phase C: Sync AddressSets
+    # =========================
+    try:
+        existing_sets = fetch_all_records(
+            addresssets_url,
+            headers,
+            {"limit": str(args.limit)},
+            args.debug,
+            args.show_http_request,
+            session=session,
+        )
+    except requests.RequestException as exc:
+        print(f"AddressSets request failed: {exc}", file=sys.stderr)
+        session.close()
+        return 1
+    except RuntimeError as exc:
+        print(f"Unexpected address-sets response: {exc}", file=sys.stderr)
+        session.close()
+        return 1
+
+    existing_by_name: dict[str, dict[str, Any]] = {}
+    for rec in existing_sets:
+        name = rec.get("name")
+        if isinstance(name, str) and name:
+            existing_by_name[name] = rec
+
+    set_created = 0
+    set_updated = 0
+    set_skipped = 0
+
+    for set_name, member_ips in sorted(desired_sets.items()):
+        desired_member_ids: list[int] = []
+        missing_members: list[str] = []
+        for ip in sorted(member_ips):
+            member_id = security_addr_id_by_address.get(ip)
+            if member_id is None:
+                missing_members.append(ip)
+            else:
+                desired_member_ids.append(member_id)
+
+        desired_member_ids = sorted(set(desired_member_ids))
+
+        if missing_members:
+            msg = f"Missing Security Address for {set_name}: {', '.join(missing_members)}"
+            if args.strict:
+                print(msg, file=sys.stderr)
+                session.close()
+                return 1
             if args.debug:
-                print(
-                    f"[debug] Building AddressSet '{set_name}' from tags {intent_tags}",
-                    file=sys.stderr,
-                )
-            
-            address_ids: list[int] = []
-            missing_ids = 0
-            
-            # Combine managed_tags_all with intent_tags for filtering
-            all_required_tags = managed_tags_all.copy()
-            
-            for source in sources:
-                if source == "services":
-                    # Fetch services matching intent tags (OR) AND managed tags (AND)
-                    try:
-                        if intent_tags:
-                            services = fetch_records_with_any_tags(
-                                services_url,
-                                headers,
-                                base_params,
-                                intent_tags,
-                                args.debug,
-                                args.show_http_request,
-                            )
-                        else:
-                            services = []
-                        
-                        # Filter services to ensure they also have all managed tags
-                        if all_required_tags:
-                            filtered_services = []
-                            for service in services:
-                                service_tags = service.get("tags", [])
-                                service_tag_slugs = [
-                                    tag.get("slug") for tag in service_tags
-                                    if isinstance(tag, dict) and tag.get("slug")
-                                ]
-                                
-                                has_all_managed = all(
-                                    tag in service_tag_slugs for tag in all_required_tags
-                                )
-                                if has_all_managed:
-                                    filtered_services.append(service)
-                            
-                            services = filtered_services
-                    
-                    except requests.RequestException as exc:
-                        print(f"Services request failed: {exc}", file=sys.stderr)
-                        return 1
-                    except RuntimeError as exc:
-                        print(f"Unexpected services response: {exc}", file=sys.stderr)
-                        return 1
-                    
-                    for service in services:
-                        for ip_record in extract_service_ipaddresses(service, args.debug):
-                            address_id = get_security_address_id(
-                                ip_record,
-                                existing_by_backref,
-                                existing_by_automation_key,
-                                args.backref_field,
-                                args.automation_key_field,
-                                base_url,
-                                security_url,
-                                headers,
-                                args.apply,
-                                args.show_payload,
-                                args.debug,
-                                args.show_http_request,
-                            )
-                            
-                            if address_id is not None:
-                                address_ids.append(address_id)
-                            else:
-                                missing_ids += 1
-                    
-                    continue
-                
-                if source == "devices":
-                    # Fetch devices matching intent tags (OR) AND managed tags (AND)
-                    try:
-                        if intent_tags:
-                            devices = fetch_records_with_any_tags(
-                                devices_url,
-                                headers,
-                                base_params,
-                                intent_tags,
-                                args.debug,
-                                args.show_http_request,
-                            )
-                        else:
-                            devices = []
-                        
-                        # Filter devices to ensure they also have all managed tags
-                        if all_required_tags:
-                            filtered_devices = []
-                            for device in devices:
-                                device_tags = device.get("tags", [])
-                                device_tag_slugs = [
-                                    tag.get("slug") for tag in device_tags
-                                    if isinstance(tag, dict) and tag.get("slug")
-                                ]
-                                
-                                has_all_managed = all(
-                                    tag in device_tag_slugs for tag in all_required_tags
-                                )
-                                if has_all_managed:
-                                    filtered_devices.append(device)
-                            
-                            devices = filtered_devices
-                    
-                    except requests.RequestException as exc:
-                        print(f"Devices request failed: {exc}", file=sys.stderr)
-                        return 1
-                    except RuntimeError as exc:
-                        print(f"Unexpected devices response: {exc}", file=sys.stderr)
-                        return 1
-                    
-                    for device in devices:
-                        for ip_record in extract_device_ipaddresses(device, args.debug):
-                            address_id = get_security_address_id(
-                                ip_record,
-                                existing_by_backref,
-                                existing_by_automation_key,
-                                args.backref_field,
-                                args.automation_key_field,
-                                base_url,
-                                security_url,
-                                headers,
-                                args.apply,
-                                args.show_payload,
-                                args.debug,
-                                args.show_http_request,
-                            )
-                            
-                            if address_id is not None:
-                                address_ids.append(address_id)
-                            else:
-                                missing_ids += 1
-                    
-                    continue
-                
-                print(f"Unknown address set source '{source}'", file=sys.stderr)
-                return 2
-            
-            if missing_ids and args.debug:
-                print(
-                    f"[debug] {missing_ids} tagged IPs missing Security IDs",
-                    file=sys.stderr,
-                )
-            
-            if args.debug:
-                print(
-                    f"[debug] AddressSet '{set_name}' resolved {len(address_ids)} addresses",
-                    file=sys.stderr,
-                )
-            
-            # Build backref from intent tags
-            backref_value = build_tag_backref(intent_tags)
-            
-            # Build payload
-            payload = build_address_set_payload(
+                print(f"[debug] {msg}", file=sys.stderr)
+            set_skipped += 1
+            print(f"SKIP-SET\t{set_name}\tmembers={len(desired_member_ids)}\treason=missing-members")
+            continue
+
+        existing = existing_by_name.get(set_name)
+        if existing is None:
+            payload = build_addressset_payload(
                 set_name,
-                address_ids,
-                address_set_backref_field,
-                args.automation_key_field,
-                backref_value,
-                automation_key,
-                description,
+                desired_member_ids,
+                managed_slug,
+                existing_record=None,
             )
-            
-            # Find existing address set
-            existing_set = None
-            if automation_key:
-                existing_set = existing_sets_by_automation_key.get(automation_key)
-            if not existing_set and backref_value:
-                existing_set = existing_sets_by_backref.get(backref_value)
-            if not existing_set:
-                existing_set = existing_sets_by_name.get(set_name)
-            
-            if existing_set:
-                if not args.update:
-                    address_set_skipped += 1
-                    print(
-                        f"ADDRSET\tSKIP\t{set_name}\t{','.join(intent_tags)}\t{len(address_ids)}"
-                    )
-                    continue
-                
-                if args.debug:
-                    print(
-                        f"[debug] Updating AddressSet '{set_name}' with {len(address_ids)} addresses",
-                        file=sys.stderr,
-                    )
-                
-                target_url = existing_set.get("url")
-                if not isinstance(target_url, str) or not target_url:
-                    record_id = existing_set.get("id")
-                    target_url = f"{address_sets_url.rstrip('/')}/{record_id}/"
-                
-                if args.apply:
-                    try:
-                        if args.show_payload:
-                            print(
-                                "PAYLOAD\tADDRESSET\tUPDATE\t"
-                                f"{json.dumps(payload, sort_keys=True)}"
-                            )
-                        
-                        updated_record = request_json(
-                            "PATCH",
-                            target_url,
-                            headers,
-                            None,
-                            payload,
-                            args.debug,
-                            args.show_http_request,
-                        )
-                        
-                        if isinstance(updated_record, dict):
-                            if backref_value:
-                                existing_sets_by_backref[backref_value] = updated_record
-                            if automation_key:
-                                existing_sets_by_automation_key[automation_key] = updated_record
-                            existing_sets_by_name[set_name] = updated_record
-                    
-                    except requests.RequestException as exc:
-                        print(f"Address set update failed: {exc}", file=sys.stderr)
-                        return 1
-                
-                address_set_updated += 1
-                print(
-                    f"ADDRSET\tUPDATE\t{set_name}\t{','.join(intent_tags)}\t{len(address_ids)}"
-                )
-                continue
-            
-            # Create new address set
             if args.apply:
                 try:
                     if args.show_payload:
-                        print(
-                            "PAYLOAD\tADDRESSET\tCREATE\t"
-                            f"{json.dumps(payload, sort_keys=True)}"
-                        )
-                    
-                    if args.debug:
-                        print(
-                            f"[debug] Creating AddressSet '{set_name}' with {len(address_ids)} addresses",
-                            file=sys.stderr,
-                        )
-                    
-                    created_record = request_json(
+                        print(f"PAYLOAD\tCREATE-SET\t{json.dumps(payload, sort_keys=True)}")
+                    _ = request_json(
                         "POST",
-                        address_sets_url,
+                        addresssets_url,
                         headers,
                         None,
                         payload,
                         args.debug,
                         args.show_http_request,
+                        session=session,
                     )
-                    
-                    if isinstance(created_record, dict):
-                        if backref_value:
-                            existing_sets_by_backref[backref_value] = created_record
-                        if automation_key:
-                            existing_sets_by_automation_key[automation_key] = created_record
-                        existing_sets_by_name[set_name] = created_record
-                
                 except requests.RequestException as exc:
-                    print(f"Address set create failed: {exc}", file=sys.stderr)
+                    print(f"Create AddressSet failed: {exc}", file=sys.stderr)
+                    session.close()
                     return 1
-            
-            address_set_created += 1
-            print(
-                f"ADDRSET\tCREATE\t{set_name}\t{','.join(intent_tags)}\t{len(address_ids)}"
-            )
-    
-    # Print summary
-    print(
-        "Address Summary: "
-        f"created={created} updated={updated} skipped={skipped}"
-    )
-    
-    if service_address_sets:
-        print(
-            "AddressSet Summary: "
-            f"created={address_set_created} "
-            f"updated={address_set_updated} "
-            f"skipped={address_set_skipped}"
+            set_created += 1
+            print(f"CREATE-SET\t{set_name}\tmembers={len(desired_member_ids)}")
+            continue
+
+        if not args.update:
+            set_skipped += 1
+            print(f"SKIP-SET\t{set_name}\tmembers={len(desired_member_ids)}\treason=update-disabled")
+            continue
+
+        existing_member_ids = extract_existing_addressset_member_ids(existing)
+        desired_tags = merged_tag_list(existing, managed_slug)
+        existing_tags = sorted(set(normalize_tag_slugs(existing.get("tags"))))
+
+        changed_members = existing_member_ids != desired_member_ids
+        changed_tags = existing_tags != desired_tags
+
+        existing_desc = existing.get("description")
+        should_set_desc = not (isinstance(existing_desc, str) and existing_desc.strip())
+        changed_desc = should_set_desc
+
+        if not (changed_members or changed_tags or changed_desc):
+            set_skipped += 1
+            print(f"SKIP-SET\t{set_name}\tmembers={len(desired_member_ids)}")
+            continue
+
+        payload = build_addressset_payload(
+            set_name,
+            desired_member_ids,
+            managed_slug,
+            existing_record=existing,
         )
-    
+
+        changed_parts: list[str] = []
+        if changed_members:
+            changed_parts.append("members")
+        if changed_tags:
+            changed_parts.append("tags")
+        if changed_desc:
+            changed_parts.append("desc")
+
+        target_url = existing.get("url")
+        if not isinstance(target_url, str) or not target_url:
+            record_id = existing.get("id")
+            target_url = f"{addresssets_url.rstrip('/')}/{record_id}/"
+
+        if args.apply:
+            try:
+                if args.show_payload:
+                    print(f"PAYLOAD\tUPDATE-SET\t{json.dumps(payload, sort_keys=True)}")
+                _ = request_json(
+                    "PATCH",
+                    target_url,
+                    headers,
+                    None,
+                    payload,
+                    args.debug,
+                    args.show_http_request,
+                    session=session,
+                )
+            except requests.RequestException as exc:
+                print(f"Update AddressSet failed: {exc}", file=sys.stderr)
+                session.close()
+                return 1
+
+        set_updated += 1
+        print(
+            f"UPDATE-SET\t{set_name}\tmembers={len(desired_member_ids)}\tchanged={('|'.join(changed_parts))}"
+        )
+
+    print(
+        f"AddressSet Summary: created={set_created} updated={set_updated} skipped={set_skipped}"
+    )
+    session.close()
     return 0
 
 
