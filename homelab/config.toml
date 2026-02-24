@@ -1,0 +1,158 @@
+# Unified default configuration for the homelab Python package.
+#
+# Each tool reads its own section (e.g. [pihole], [mikrotik_dhcp_leases]).
+# CLI flags always override values from this file.
+
+[globals]
+# Shared values used by multiple tools.
+
+# Google Sheets CSV export URL (must contain gid=0; tools substitute their specific gids)
+sheet_url = "https://docs.google.com/spreadsheets/d/1f4emn4uIPscEgOHtgmETODlTvz1eh2xZlnpBBNGQlWA/export?format=csv&gid=0"
+
+# Nodes sheet gid (used by multiple tools)
+nodes_gid = 344016240
+
+# Default MikroTik RouterOS connection target used by mikrotik-dhcp + mikrotik-firewall
+mikrotik_host = "192.168.10.1"
+mikrotik_user = "admin"
+
+# Example overrides (optional):
+# mikrotik_password_env = "MIKROTIK_PASSWORD"  # legacy alias for password_env
+
+# MikroTik RouterOS SSH defaults (used by mikrotik-dhcp/mikrotik-firewall/mikrotik-backup)
+ssh_port = 22
+user = "admin"
+
+# Optional password env var to use with sshpass (leave empty to use SSH keys/agent)
+password_env = "MIKROTIK_PASSWORD"
+
+# Optional SSH key path (passed as -i). Leave empty to use your SSH agent/defaults.
+ssh_identity_file = ""
+
+# Local backup destination (can be overridden per-device)
+backup_dir = "../mikrotik/backups"
+
+[pihole]
+# Sheet gids
+dns_gid = 95412045
+
+# Example overrides (optional):
+# sheet_url = "https://.../export?format=csv&gid=0"  # defaults to globals.sheet_url
+# nodes_gid = 344016240                               # defaults to globals.nodes_gid
+
+# Template + output paths (relative paths resolve relative to this file)
+template = "../pihole/pihole.toml.j2"
+output = "../pihole/pihole.toml"
+
+# Pi-hole instance SSH settings (used with --apply)
+pihole_user = "root"
+pihole_host = "192.168.10.11"
+
+# Whether to use sudo for remote operations during --apply.
+use_sudo = false
+
+
+[mikrotik_backup.defaults]
+# Inherit from [globals] (and legacy [mikrotik_defaults] if present) unless overridden here.
+
+# Example overrides (optional):
+# ssh_port = 22
+# user = "admin"
+# password_env = "MIKROTIK_PASSWORD"
+# ssh_identity_file = "~/.ssh/id_ed25519"
+# backup_dir = "../mikrotik/backups"
+
+[mikrotik_backup.devices.hexs]
+host = "192.168.10.1"
+
+[mikrotik_backup.devices.crs]
+host = "192.168.10.2"
+
+[mikrotik_backup.devices.cap_ax]
+host = "192.168.10.3"
+
+
+[mikrotik_dhcp_leases]
+# Example overrides (optional; all default to [globals] if omitted):
+# sheet_url = "https://.../export?format=csv&gid=0"
+# nodes_gid = 344016240
+# mikrotik_host = "192.168.10.1"
+# mikrotik_user = "admin"
+# ssh_port = 22
+# password_env = "MIKROTIK_PASSWORD"
+# ssh_identity_file = "~/.ssh/id_ed25519"
+# backup_dir = "../mikrotik/backups"
+
+# Nodes sheet column names
+lease_type_column = "Static/DHCP"
+ip_column = "IP Address"
+subnet_column = "Subnet"
+mac_column = "MAC Address"
+
+# Output file containing RouterOS CLI commands
+output = "../mikrotik/mikrotik-dhcp-leases.rsc"
+
+# When running with --apply, the tool also downloads a full RouterOS /export
+# and writes it to this directory.
+
+
+[mikrotik_firewall]
+# Uses the same sheet_url and nodes_gid as [mikrotik_dhcp_leases] by default.
+# Set caddy_gid here (same Services tab used by the Caddy generator).
+caddy_gid = 0
+
+# Example overrides (optional; all default to [globals] / [mikrotik_dhcp_leases] if omitted):
+# sheet_url = "https://.../export?format=csv&gid=0"
+# nodes_gid = 344016240
+# mikrotik_host = "192.168.10.1"
+# mikrotik_user = "admin"
+# ssh_port = 22
+# password_env = "MIKROTIK_PASSWORD"
+# ssh_identity_file = "~/.ssh/id_ed25519"
+
+# One or more Caddy proxy IPs in the DMZ VLAN.
+# May also be provided at runtime via --caddy-ip.
+caddy_ips = ["192.168.20.3"]
+
+# Interface names (match your RouterOS config).
+dmz_interface = "vlan20-dmz"
+homelab_interface = "vlan30-homelab"
+
+# If an ingress=caddy row is missing backend_port, assume this port.
+caddy_default_backend_port = 80
+
+# Output script path
+output = "../mikrotik/mikrotik-firewall.rsc"
+
+# DHCP server selection overrides (optional)
+# dhcp_server_by_subnet = { "192.168.10.0/24" = "dhcp-lan" }
+
+
+[caddy]
+# Caddyfile generator configuration.
+# This section inherits from [globals] (e.g. sheet_url/nodes_gid) unless overridden here.
+
+# Sheet configuration
+# sheet_url = "https://.../export?format=csv&gid=0"  # defaults to globals.sheet_url
+# caddy_gid = 0                                      # required (Services tab)
+# nodes_gid = 344016240                              # optional (backend hostname->IP lookup)
+
+# Filesystem paths
+# template = "../caddy/Caddyfile.template"           # default: network.old/caddy/Caddyfile.template
+# output = "../caddy/Caddyfile"                     # default: network.old/caddy/downloads/Caddyfile
+# work_dir = "../caddy/downloads"                   # default: network.old/caddy/downloads
+# dump_json = false
+
+# Zones
+# caddy_zones = [
+#   { zone = "example.com", wildcard = true, redirect_www = false },
+# ]
+
+# Optional deploy settings for --apply
+# caddy_deploy = {
+#   host = "caddy.example.com",
+#   username = "root",
+#   port = 22,
+#   path = "/etc/caddy/Caddyfile",
+#   restart_command = "systemctl reload caddy",
+# }

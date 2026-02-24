@@ -1,0 +1,54 @@
+version: "3"
+
+vars:
+  host: '{{default "root@proxy.dmz.moyer.wtf" .PROXY_HOST}}'
+  caddyfile_dest: '{{default "/etc/caddy/Caddyfile" .CADDYFILE_PATH}}'
+  bootstrap_script_remote: '{{default "/tmp/bootstrap-caddy-cloudflare.sh" .BOOTSTRAP_REMOTE}}'
+
+tasks:
+  sync-caddyfile:
+    desc: Copy the (generated) Caddyfile to the container.
+    preconditions:
+      - sh: "command -v ssh >/dev/null"
+        msg: "ssh is required"
+      - sh: "command -v scp >/dev/null"
+        msg: "scp is required"
+    cmds:
+      - scp -q ./Caddyfile "{{.host}}:{{.caddyfile_dest}}"
+
+  validate:
+    desc: Validate the remote Caddyfile.
+    preconditions:
+      - sh: "command -v ssh >/dev/null"
+        msg: "ssh is required"
+    cmds:
+      - ssh {{.host}} "caddy validate --config {{.caddyfile_dest}}"
+
+  reload:
+    desc: Reload Caddy (zero-downtime if config is valid).
+    preconditions:
+      - sh: "command -v ssh >/dev/null"
+        msg: "ssh is required"
+    cmds:
+      - ssh {{.host}} "systemctl reload caddy"
+
+  deploy:
+    desc: Copy Caddyfile, validate, then reload Caddy.
+    deps:
+      - sync-caddyfile
+    cmds:
+      - task: validate
+      - task: reload
+    silent: true
+
+  install-cloudflare-module:
+    desc: Build + install Caddy with the Cloudflare DNS module (xcaddy) on the container.
+    preconditions:
+      - sh: "command -v ssh >/dev/null"
+        msg: "ssh is required"
+      - sh: "command -v scp >/dev/null"
+        msg: "scp is required"
+    cmds:
+      - scp -q ./bootstrap-caddy-cloudflare.sh "{{.host}}:{{.bootstrap_script_remote}}"
+      - ssh {{.host}} "chmod +x {{.bootstrap_script_remote}} && if [ \"\$(id -u)\" -eq 0 ]; then {{.bootstrap_script_remote}}; else sudo {{.bootstrap_script_remote}}; fi"
+      - ssh {{.host}} "rm -f {{.bootstrap_script_remote}}" || true

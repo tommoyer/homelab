@@ -35,3 +35,25 @@ Taskwarrior/Timewarrior sync experiments and notes, including the timew-webhook 
 ## Getting Started
 
 Please refer to the `README.md` files in each subdirectory for specific setup and usage instructions.
+
+### Unified CLI
+
+Most repo automation scripts are available via the single entrypoint:
+
+Preferred module invocation:
+
+- `python3 -m homelab pihole --help`
+- `python3 -m homelab mikrotik-dhcp --help`
+- `python3 -m homelab mikrotik-backup --help`
+- `python3 -m homelab mikrotik-firewall --help`
+- `python3 -m homelab caddy --help`
+
+Direct script invocation (equivalent):
+
+- `python3 ./homelab_cli.py pihole --help`
+- `python3 ./homelab_cli.py mikrotik-dhcp --help`
+- `python3 ./homelab_cli.py mikrotik-backup --help`
+- `python3 ./homelab_cli.py mikrotik-firewall --help`
+- `python3 ./homelab_cli.py caddy --help`
+
+Defaults/config live under `homelab/` (see `homelab/config.toml`).

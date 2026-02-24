@@ -1,0 +1,6 @@
+pandas
+openpyxl
+jinja2
+toml
+requests
+
