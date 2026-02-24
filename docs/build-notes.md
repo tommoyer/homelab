@@ -7,41 +7,29 @@
 - Added storage backends for ISO images, container templates, and VM disks
 - Setup keepalived for HA using these notes: [Proxmox Keepalived Notes](docs/proxmox-keepalived-notes.md)
 
-## `pihole-homelab`
+## `pihole`
 
-This Pi-hole instance serves the homelab VLAN
+This Pi-hole instance serves as the internal DNS for the home network
 
-- Base OS: Debian 13
-- Container/VM: LXC container via Proxmox
-- Installed via: [Pi-hole Official Guide](https://docs.pi-hole.net/main/prerequisites/installation/)
-- Added `unbound` using the instructions from [Pi-hole Docs - Using Unbound as a Recursive DNS Resolver](https://docs.pi-hole.net/guides/unbound/)
-- Hosts file: `pihole-homelab.toml`
-- Remote host: `pihole.homelab.moywer.wtf`
-- Remote path: `/etc/pihole/pihole.toml`
-- SSH user: `root`
-- SSH port: `22`
-- DNS entries are generated from the System Inventory CSV for the `homelab` VLAN
-- The script `update_pihole_hosts.py` is used to update the hosts file and reload Pi-hole
-- Firewall ports for proxy:
-    - DMZ[Tailscale] -> Homelab VLAN: 80 (HTTP)
+- Installed via [Proxmox Helper Script for Pi-hole](https://community-scripts.github.io/ProxmoxVE/scripts?id=pihole&category=Adblock+%26+DNS)
+- Configured to use the Unbound DNS server for upstream DNS resolution
+- A and CNAME records generated from the `pihole` folder of this repository using the [Pi-hole DNS Record Generator Script](#)
 
-## `pihole-dmz`
+## `uptime-kuma`
 
-This Pi-hole instance serves the DMZ VLAN
+The Uptime Kuma application for monitoring the uptime of services
 
-- Base OS: Debian 13
-- Container/VM: LXC container via Proxmox
-- Installed via: [Pi-hole Official Guide](https://docs.pi-hole.net/main/prerequisites/installation/)
-- Added `unbound` using the instructions from [Pi-hole Docs - Using Unbound as a Recursive DNS Resolver](https://docs.pi-hole.net/guides/unbound/)
-- Hosts file: `pihole-dmz.toml`
-- Remote host: `pihole.dmz.moywer.wtf`
-- Remote path: `/etc/pihole/pihole.toml`
-- SSH user: `root`
-- SSH port: `22`
-- DNS entries are generated from the System Inventory CSV for the `dmz` VLAN
-- The script `update_pihole_hosts.py` is used to update the hosts file and reload Pi-hole
-- Firewall ports for proxy:
-    - None, same VLAN
+- Installed via [Docker Compose for Uptime Kuma](https://github.com/louislam/uptime-kuma/blob/master/compose.yaml)
+- Installed on Raspberry Pi 4 running Raspberry Pi OS
+
+## `proxy`
+
+The Caddy reverse proxy serving services in the Homelab VLAN from the DMZ VLAN
+
+- Installed via [Proxmox Helper Script for Caddy](https://community-scripts.github.io/ProxmoxVE/scripts?id=caddy)
+- Caddyfile generated from the `caddy` folder of this repository using the [Caddyfile Generator Script](#)
+
+# NOT DONE YET
 
 ## `homarr`
 
@@ -49,12 +37,7 @@ The Homarr dashboard for managing and monitoring services
 
 - Installed via [Proxmox Helper Script for Homarr](https://community-scripts.github.io/ProxmoxVE/scripts?id=homarr)
 
-## `proxy`
 
-The Caddy reverse proxy serving services in the Homelab VLAN from the DMZ VLAN
-
-- Installed via [Proxmox Helper Script for Docker LXC](https://community-scripts.github.io/ProxmoxVE/scripts?id=docker&category=Containers+%26+Docker)
-- Dockerfile and configuration managed in the `proxy` folder of this repository
 
 ## `unifi`
 
@@ -68,11 +51,7 @@ The Tandoor Recipes application for managing recipes and meal planning
 
 - Installed via [Proxmox Helper Script for Tandoor Recipes](https://community-scripts.github.io/ProxmoxVE/scripts?id=tandoor)
 
-## `uptime-kuma`
 
-The Uptime Kuma application for monitoring the uptime of services
-
-- Installed via [Proxmox Helper Script for Uptime Kuma](https://community-scripts.github.io/ProxmoxVE/scripts?id=uptimekuma)
 
 ## `firefly-iii`
 
@@ -165,25 +144,6 @@ The static website hosted at `thomasmoyer.org`
 - Added a DNS record to `/etc/hosts` to resolve `git.moyer.wtf` to the Caddy proxy in the DMZ
 - TODO: Should we publish A record for `git.moyer.wtf` in Pihole instead of editing `/etc/hosts`?
 - Set GITEA_TOKEN secret in Proxmox LXC container for pushing updates to Gitea
-
-## `netbox`
-
-The NetBox application for IP address management and data center infrastructure management
-
-- Installed via [Proxmox Helper Script for NetBox](https://community-scripts.github.io/ProxmoxVE/scripts?id=netbox)
-- Added plugins:
-    - Custom Objects
-    - DNS
-    - Bind Provisioner
-
-## `ns`
-
-The DNS server for Netbox managed DNS records
-
-- Base OS: Debian 13
-- Container/VM: LXC container via Proxmox
-- Installed BIND9 via apt
-- Configured to use Netbox [Bind Provisioner plugin](https://jpmens.net/2026/01/23/providing-zone-transfers-directly-from-netbox-dns/) to manage DNS records
 
 ## `mumble`
 

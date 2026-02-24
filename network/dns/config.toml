@@ -1,7 +1,0 @@
-base_url = "https://192.168.10.30"
-work_dir = "./downloads"
-
-netbox_zone_filters = [
-	{ zone = "moyer.wtf", views = ["external"] },
-	{ zone = "thomasmoyer.org", views = ["external"] },
-]

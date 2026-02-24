@@ -1,2 +1,0 @@
-export NETBOX_API_KEY="<fill-me-in>"
-export CLOUDFLARE_API_TOKEN="<fill-me-in>"
