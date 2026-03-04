@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shutil
 import subprocess
@@ -8,16 +9,21 @@ import tempfile
 from pathlib import Path
 from typing import Iterable
 
+logger = logging.getLogger(__name__)
+
 
 def require_command(name: str) -> None:
     if shutil.which(name) is None:
         raise RuntimeError(f"required command not found in PATH: {name}")
+    logger.debug("require_command: found %s", name)
 
 
 def ssh_control_path(*, prefix: str, username: str, host: str, port: int | None = None) -> Path:
     key = f"{username}@{host}:{port or ''}".encode("utf-8")
     digest = hashlib.sha1(key).hexdigest()[:12]
-    return Path(tempfile.gettempdir()) / f"{prefix}-ssh-{digest}.sock"
+    path = Path(tempfile.gettempdir()) / f"{prefix}-ssh-{digest}.sock"
+    logger.debug("ssh_control_path: %s", path)
+    return path
 
 
 def ssh_mux_options(control_path: Path) -> list[str]:
@@ -33,7 +39,9 @@ def ssh_mux_options(control_path: Path) -> list[str]:
 
 def prefix_sshpass(argv: Iterable[str], *, enabled: bool) -> list[str]:
     argv_list = list(argv)
-    return (["sshpass", "-e", *argv_list] if enabled else argv_list)
+    out = (["sshpass", "-e", *argv_list] if enabled else argv_list)
+    logger.debug("prefix_sshpass: enabled=%s", enabled)
+    return out
 
 
 def sshpass_env_from_password_env(*, password_env: str | None) -> dict[str, str] | None:
@@ -44,6 +52,7 @@ def sshpass_env_from_password_env(*, password_env: str | None) -> dict[str, str]
         raise RuntimeError(f"password environment variable is not set: {password_env}")
     env = dict(os.environ)
     env["SSHPASS"] = env_value
+    logger.debug("sshpass_env_from_password_env: using %s", password_env)
     return env
 
 
@@ -62,10 +71,12 @@ def scp_base_args(*, control_path: Path, port: int, identity_file: Path | None) 
 
 
 def ssh_start_master(*, ssh_args: list[str], target: str, env: dict[str, str] | None) -> None:
+    logger.debug("ssh_start_master: target=%s", target)
     subprocess.run([*ssh_args, "-Nf", target], check=True, env=env)
 
 
 def ssh_stop_master(*, ssh_args: list[str], target: str, env: dict[str, str] | None) -> None:
+    logger.debug("ssh_stop_master: target=%s", target)
     subprocess.run([*ssh_args, "-O", "exit", target], check=False, env=env)
 
 
@@ -77,6 +88,7 @@ def ssh_run(
     check: bool = True,
     env: dict[str, str] | None,
 ) -> subprocess.CompletedProcess[str]:
+    logger.debug("ssh_run: target=%s command=%r check=%s", target, command, check)
     return subprocess.run(
         [*ssh_args, target, command],
         check=check,
@@ -84,3 +96,4 @@ def ssh_run(
         capture_output=True,
         env=env,
     )
+

@@ -1,0 +1,204 @@
+---
+- name: Set Proxmox guest DNS (nameserver/searchdomain) via Proxmox API
+  hosts: "{{ target_hosts | default('proxmox_dns') }}"
+  gather_facts: false
+  become: false
+
+  tasks:
+    - name: Assert required Proxmox API settings
+      ansible.builtin.assert:
+        that:
+          - proxmox_api_host is defined
+          - (proxmox_api_host | string | length) > 0
+          - proxmox_api_user is defined
+          - (proxmox_api_user | string | length) > 0
+          - (
+              proxmox_api_token is defined
+              or (
+                proxmox_api_token_id is defined
+                and proxmox_api_token_secret is defined
+                and (proxmox_api_token_secret | string | length) > 0
+              )
+              or (
+                proxmox_api_password is defined
+                and (proxmox_api_password | string | length) > 0
+              )
+            )
+        fail_msg: >-
+          Missing Proxmox API auth variables. Provide either:
+          - proxmox_api_token (full "user@realm!tokenid=secret" string), OR
+          - proxmox_api_token_id + proxmox_api_token_secret, OR
+          - proxmox_api_password.
+
+    - name: Build Proxmox API base URL
+      ansible.builtin.set_fact:
+        proxmox_api_base_url: "https://{{ proxmox_api_host }}:8006/api2/json"
+
+    - name: Build token auth header (preferred)
+      ansible.builtin.set_fact:
+        _pve_headers:
+          Authorization: >-
+            PVEAPIToken={%
+              if proxmox_api_token is defined
+            %}{{ proxmox_api_token }}{%
+              else
+            %}{{
+              (
+                proxmox_api_token_id
+                if ('!' in (proxmox_api_token_id | string))
+                else (proxmox_api_user ~ '!' ~ proxmox_api_token_id)
+              )
+              ~ '=' ~ proxmox_api_token_secret
+            }}{%
+              endif
+            %}
+      when: proxmox_api_token is defined or (proxmox_api_token_id is defined and proxmox_api_token_secret is defined)
+      no_log: true
+
+    - name: Login with username/password (fallback)
+      ansible.builtin.uri:
+        url: "{{ proxmox_api_base_url }}/access/ticket"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          username: "{{ proxmox_api_user }}"
+          password: "{{ proxmox_api_password }}"
+        return_content: true
+        validate_certs: "{{ proxmox_api_validate_certs | default(false) }}"
+      register: _pve_login
+      when:
+        - _pve_headers is not defined
+        - proxmox_api_password is defined
+      delegate_to: localhost
+      no_log: true
+
+    - name: Build cookie + CSRF headers
+      ansible.builtin.set_fact:
+        _pve_headers:
+          CSRFPreventionToken: "{{ _pve_login.json.data.CSRFPreventionToken }}"
+          Cookie: "PVEAuthCookie={{ _pve_login.json.data.ticket }}"
+      when:
+        - _pve_headers is not defined
+        - _pve_login is defined
+      no_log: true
+
+    - name: Assert DNS vars present for host
+      ansible.builtin.assert:
+        that:
+          - (
+              (proxmox_nameserver is defined and (proxmox_nameserver | string | length) > 0)
+              or (proxmox_searchdomain is defined and (proxmox_searchdomain | string | length) > 0)
+            )
+        fail_msg: >-
+          This host is in proxmox_dns but has no DNS values.
+          Provide hostvars proxmox_nameserver and/or proxmox_searchdomain.
+
+    - name: Fetch VM/LXC resources (for lookup)
+      ansible.builtin.uri:
+        url: "{{ proxmox_api_base_url }}/cluster/resources?type=vm"
+        method: GET
+        headers: "{{ _pve_headers }}"
+        return_content: true
+        validate_certs: "{{ proxmox_api_validate_certs | default(false) }}"
+      register: _pve_resources
+      delegate_to: localhost
+
+    - name: Init selected Proxmox resource
+      ansible.builtin.set_fact:
+        _pve_resource: {}
+
+    - name: Select resource by VMID when provided
+      ansible.builtin.set_fact:
+        _pve_resource: "{{ item }}"
+      loop: "{{ _pve_resources.json.data | default([]) }}"
+      when:
+        - (_pve_resource | length) == 0
+        - proxmox_vmid is defined
+        - (proxmox_vmid | string | length) > 0
+        - (item.vmid | string) == (proxmox_vmid | string)
+
+    - name: Select resource by name when VMID not provided
+      ansible.builtin.set_fact:
+        _pve_resource: "{{ item }}"
+      loop: "{{ _pve_resources.json.data | default([]) }}"
+      when:
+        - (_pve_resource | length) == 0
+        - proxmox_vmid is not defined or (proxmox_vmid | string | length) == 0
+        - item.name is defined
+        - (item.name | lower) == ((proxmox_guest_name | default(inventory_hostname)) | lower)
+
+    - name: Assert resource was found
+      ansible.builtin.assert:
+        that:
+          - (_pve_resource | length) > 0
+          - _pve_resource.node is defined
+          - _pve_resource.vmid is defined
+          - _pve_resource.type is defined
+        fail_msg: >-
+          Could not find a Proxmox VM/LXC named '{{ proxmox_guest_name | default(inventory_hostname) }}'.
+          If the guest name differs, set proxmox_guest_name, or provide proxmox_vmid/proxmox_node/proxmox_type.
+
+    - name: Resolve target node/vmid/type
+      ansible.builtin.set_fact:
+        _pve_node: "{{ proxmox_node | default(_pve_resource.node) }}"
+        _pve_vmid: "{{ (proxmox_vmid | default(_pve_resource.vmid)) | string }}"
+        _pve_type: "{{ (proxmox_type | default(_pve_resource.type)) | string | lower }}"
+
+    - name: Assert guest type supported
+      ansible.builtin.assert:
+        that:
+          - _pve_type in ['lxc', 'qemu']
+        fail_msg: "Unsupported Proxmox guest type: {{ _pve_type }} (expected 'lxc' or 'qemu')"
+
+    - name: Fetch current guest config
+      ansible.builtin.uri:
+        url: "{{ proxmox_api_base_url }}/nodes/{{ _pve_node }}/{{ _pve_type }}/{{ _pve_vmid }}/config"
+        method: GET
+        headers: "{{ _pve_headers }}"
+        return_content: true
+        validate_certs: "{{ proxmox_api_validate_certs | default(false) }}"
+      register: _pve_guest_cfg
+      delegate_to: localhost
+
+    - name: Compute desired DNS settings
+      ansible.builtin.set_fact:
+        _desired_nameserver: "{{ (proxmox_nameserver | default('')) | string }}"
+        _desired_searchdomain: "{{ (proxmox_searchdomain | default('')) | string }}"
+        _current_nameserver: "{{ (_pve_guest_cfg.json.data.nameserver | default('')) | string }}"
+        _current_searchdomain: "{{ (_pve_guest_cfg.json.data.searchdomain | default('')) | string }}"
+
+    - name: Determine whether update is required
+      ansible.builtin.set_fact:
+        _pve_dns_needs_update: >-
+          {{
+            (
+              (_desired_nameserver | length > 0 and _desired_nameserver != _current_nameserver)
+              or (_desired_searchdomain | length > 0 and _desired_searchdomain != _current_searchdomain)
+            )
+          }}
+
+    - name: Update Proxmox guest DNS (nameserver/searchdomain)
+      ansible.builtin.uri:
+        url: "{{ proxmox_api_base_url }}/nodes/{{ _pve_node }}/{{ _pve_type }}/{{ _pve_vmid }}/config"
+        method: PUT
+        headers: "{{ _pve_headers }}"
+        body_format: form-urlencoded
+        body: >-
+          {{
+            dict(
+              nameserver=_desired_nameserver if (_desired_nameserver | length > 0) else omit,
+              searchdomain=_desired_searchdomain if (_desired_searchdomain | length > 0) else omit
+            )
+          }}
+        return_content: true
+        validate_certs: "{{ proxmox_api_validate_certs | default(false) }}"
+      when: _pve_dns_needs_update | bool
+      delegate_to: localhost
+      register: _pve_dns_update
+
+    - name: Report guest DNS state
+      ansible.builtin.debug:
+        msg: >-
+          Proxmox {{ _pve_type }} {{ _pve_node }}/{{ _pve_vmid }}:
+          nameserver '{{ _current_nameserver }}' -> '{{ _desired_nameserver if (_desired_nameserver | length > 0) else _current_nameserver }}',
+          searchdomain '{{ _current_searchdomain }}' -> '{{ _desired_searchdomain if (_desired_searchdomain | length > 0) else _current_searchdomain }}'

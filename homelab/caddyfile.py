@@ -2,120 +2,46 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import ipaddress
 import json
+import logging
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
-from .config import get_effective_table, load_toml_or_exit
+from .config import (
+    get_config_value,
+    get_effective_table,
+    load_toml_or_exit,
+    pre_parse_config,
+    render_jinja_template,
+    resolve_path_relative_to_config,
+)
+from .logging_utils import configure_logging
+from .sheets import (
+    as_str,
+    build_sheet_url,
+    df_with_normalized_columns,
+    load_nodes_lookup,
+    normalize_ip,
+    normalize_ports,
+    parse_bool,
+)
+from .ssh import (
+    require_command,
+    scp_base_args,
+    ssh_base_args,
+    ssh_control_path,
+    ssh_run,
+    ssh_start_master,
+    ssh_stop_master,
+)
 
-
-def load_config(path: Path, debug: bool) -> dict[str, Any]:
-    if debug:
-        print(f"[debug] Loading config from {path}", file=sys.stderr)
-    data = load_toml_or_exit(path)
-    if debug:
-        print(f"[debug] Loaded config keys: {sorted(data.keys())}", file=sys.stderr)
-    return data
-
-
-def _get_config_value(config: dict[str, Any], key: str, default: Any) -> Any:
-    value = config.get(key, default)
-    return default if value is None else value
-
-
-def normalize_column_name(name: str) -> str:
-    name = (name or "").strip().lower()
-    name = re.sub(r"[^a-z0-9]+", "_", name)
-    return name.strip("_")
-
-
-def df_with_normalized_columns(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df.columns = [normalize_column_name(str(col)) for col in df.columns]
-    return df
-
-
-def is_blank(value: Any) -> bool:
-    if value is None:
-        return True
-    try:
-        return bool(pd.isna(value))
-    except Exception:
-        return False
-
-
-def as_str(value: Any) -> str:
-    if is_blank(value):
-        return ""
-    return str(value).strip()
-
-
-def parse_bool(value: Any, default: bool = False) -> bool:
-    if is_blank(value):
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(int(value))
-    if isinstance(value, str):
-        cleaned = value.strip().lower()
-        if cleaned in {"true", "t", "yes", "y", "1", "on"}:
-            return True
-        if cleaned in {"false", "f", "no", "n", "0", "off"}:
-            return False
-    return default
-
-
-def normalize_ports(value: Any) -> list[int]:
-    if is_blank(value) or value is None:
-        return []
-    if isinstance(value, list):
-        ports: list[int] = []
-        for item in value:
-            ports.extend(normalize_ports(item))
-        return ports
-    if isinstance(value, (int, float)):
-        try:
-            return [int(value)]
-        except (TypeError, ValueError):
-            return []
-    if isinstance(value, str):
-        cleaned = value.strip()
-        if not cleaned:
-            return []
-        parts = re.split(r"[\s,;/]+", cleaned)
-        ports: list[int] = []
-        for part in parts:
-            part = part.strip()
-            if not part:
-                continue
-            if part.isdigit():
-                ports.append(int(part))
-        return ports
-    return []
-
-
-def normalize_ip(address: str) -> str | None:
-    address = (address or "").strip()
-    if not address:
-        return None
-    try:
-        return str(ipaddress.ip_interface(address).ip)
-    except ValueError:
-        try:
-            return str(ipaddress.ip_address(address))
-        except ValueError:
-            return None
+logger = logging.getLogger(__name__)
 
 
 def slugify(value: str) -> str:
@@ -331,90 +257,6 @@ def render_template(template_text: str, server_blocks: list[str]) -> str:
     return replace_block(rendered, "{{SERVER_BLOCKS}}", server_blocks)
 
 
-def build_ssh_command(host: str, username: str, port: int | None) -> list[str]:
-    command = ["ssh", "-o", "ConnectTimeout=10"]
-    if port:
-        command.extend(["-p", str(port)])
-    command.append(f"{username}@{host}")
-    return command
-
-
-def build_scp_command(
-    local_path: str,
-    host: str,
-    username: str,
-    remote_path: str,
-    port: int | None,
-) -> list[str]:
-    command = ["scp", "-q"]
-    if port:
-        command.extend(["-P", str(port)])
-    command.extend([local_path, f"{username}@{host}:{remote_path}"])
-    return command
-
-
-def deploy_caddyfile(
-    *,
-    local_path: str,
-    host: str,
-    username: str,
-    remote_path: str,
-    restart_command: str,
-    port: int | None,
-    debug: bool,
-) -> None:
-    if shutil.which("scp") is None:
-        raise RuntimeError("Required command not found in PATH: scp")
-    if shutil.which("ssh") is None:
-        raise RuntimeError("Required command not found in PATH: ssh")
-
-    scp_command = build_scp_command(local_path, host, username, remote_path, port)
-    if debug:
-        print(
-            f"[debug] Copying Caddyfile to {username}@{host}:{remote_path}",
-            file=sys.stderr,
-        )
-    result = subprocess.run(scp_command, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "Caddyfile upload failed")
-
-    ssh_command = build_ssh_command(host, username, port)
-    if debug:
-        print(
-            f"[debug] Restarting Caddy on {username}@{host} with: {restart_command}",
-            file=sys.stderr,
-        )
-    result = subprocess.run(
-        ssh_command + [restart_command],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "Caddy restart failed")
-
-
-def build_sheet_url(sheet_url: str, gid: int) -> str:
-    if "gid=0" not in sheet_url:
-        raise ValueError("sheet_url must contain 'gid=0' placeholder")
-    return sheet_url.replace("gid=0", f"gid={gid}")
-
-
-def load_nodes_lookup(nodes_df: pd.DataFrame) -> dict[str, str]:
-    lookup: dict[str, str] = {}
-    for _, row in nodes_df.iterrows():
-        dns_name = as_str(row.get("dns_name"))
-        hostname = as_str(row.get("hostname"))
-        ip = normalize_ip(as_str(row.get("ip_address")))
-        if not ip:
-            continue
-        if dns_name:
-            lookup[dns_name.lower()] = ip
-        if hostname:
-            lookup[hostname.lower()] = ip
-    return lookup
-
-
 def collect_proxy_services_from_sheet(
     services_df: pd.DataFrame,
     *,
@@ -424,6 +266,7 @@ def collect_proxy_services_from_sheet(
     services: list[dict[str, Any]] = []
 
     for idx, row in services_df.iterrows():
+        row_id = int(cast(int, idx))
         enabled = parse_bool(row.get("frontend_enabled"), default=False)
         if not enabled:
             continue
@@ -474,7 +317,7 @@ def collect_proxy_services_from_sheet(
 
         services.append(
             {
-                "id": int(idx),
+                "id": row_id,
                 "fqdn": fqdn,
                 "backend": backend,
                 "ignore_tls": bool(ignore_tls),
@@ -482,23 +325,6 @@ def collect_proxy_services_from_sheet(
         )
 
     return services
-
-
-def _ssh_control_path(username: str, host: str) -> Path:
-    key = f"{username}@{host}".encode("utf-8")
-    digest = hashlib.sha1(key).hexdigest()[:12]
-    return Path(tempfile.gettempdir()) / f"caddy-ssh-{digest}.sock"
-
-
-def _ssh_mux_options(control_path: Path) -> list[str]:
-    return [
-        "-o",
-        "ControlMaster=auto",
-        "-o",
-        "ControlPersist=60s",
-        "-o",
-        f"ControlPath={control_path}",
-    ]
 
 
 def deploy_caddyfile_mux(
@@ -511,54 +337,31 @@ def deploy_caddyfile_mux(
     port: int | None,
     debug: bool,
 ) -> None:
-    if shutil.which("scp") is None:
-        raise RuntimeError("Required command not found in PATH: scp")
-    if shutil.which("ssh") is None:
-        raise RuntimeError("Required command not found in PATH: ssh")
+    require_command("scp")
+    require_command("ssh")
 
-    ssh_target = f"{username}@{host}"
-    control_path = _ssh_control_path(username, host)
-    mux_opts = _ssh_mux_options(control_path)
+    target = f"{username}@{host}"
+    effective_port = port or 22
+    control_path = ssh_control_path(prefix="caddy", username=username, host=host, port=effective_port)
 
-    # Start (or reuse) a master connection so scp + ssh share auth.
-    base_ssh = ["ssh", *mux_opts]
-    if port:
-        base_ssh.extend(["-p", str(port)])
-    subprocess.run([*base_ssh, "-Nf", ssh_target], check=True)
+    ssh_args = ssh_base_args(control_path=control_path, port=effective_port, identity_file=None)
+    scp_args_list = scp_base_args(control_path=control_path, port=effective_port, identity_file=None)
 
+    ssh_start_master(ssh_args=ssh_args, target=target, env=None)
     try:
-        scp_cmd = ["scp", *mux_opts]
-        if port:
-            scp_cmd.extend(["-P", str(port)])
-        scp_cmd.extend([local_path, f"{ssh_target}:{remote_path}"])
-        if debug:
-            print(f"[debug] scp -> {ssh_target}:{remote_path}", file=sys.stderr)
-        subprocess.run(scp_cmd, check=True)
+        logger.debug("caddy: scp -> %s:%s", target, remote_path)
+        subprocess.run([*scp_args_list, local_path, f"{target}:{remote_path}"], check=True)
 
-        ssh_cmd = ["ssh", *mux_opts]
-        if port:
-            ssh_cmd.extend(["-p", str(port)])
-        ssh_cmd.extend([ssh_target, restart_command])
-        if debug:
-            print(f"[debug] restart -> {restart_command}", file=sys.stderr)
-        subprocess.run(ssh_cmd, check=True)
+        logger.debug("caddy: restart -> %s", restart_command)
+        ssh_run(ssh_args=ssh_args, target=target, command=restart_command, env=None)
     finally:
-        subprocess.run([*base_ssh, "-O", "exit", ssh_target], check=False)
+        ssh_stop_master(ssh_args=ssh_args, target=target, env=None)
 
 
 def main(argv: list[str] | None = None) -> int:
-    default_dir = Path(__file__).resolve().parents[1] / "network.old" / "caddy"
-
-    pre_parser = argparse.ArgumentParser(add_help=False)
-    pre_parser.add_argument(
-        "--config",
-        type=Path,
-        default=default_dir / "generate-caddyfile.toml",
-        help="Path to TOML config file containing default parameters",
-    )
-    pre_args, _ = pre_parser.parse_known_args(argv)
-    config_path = pre_args.config.expanduser().resolve()
-    config = load_config(config_path, debug=False)
+    default_dir = Path(__file__).resolve().parent / "caddy"
+    config_path, config = pre_parse_config(argv)
+    globals_cfg = get_effective_table(config, "globals", legacy_root_fallback=True)
     cfg = get_effective_table(config, "caddy", legacy_root_fallback=True)
 
     parser = argparse.ArgumentParser(
@@ -575,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--sheet-url",
-        default=_get_config_value(cfg, "sheet_url", ""),
+        default=get_config_value(globals_cfg, "sheet_url", get_config_value(cfg, "sheet_url", "")),
         help=(
             "Google Sheets CSV export URL containing 'gid=0'. "
             "The script substitutes Caddy/Nodes gids into this URL."
@@ -584,38 +387,68 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--caddy-gid",
         type=int,
-        default=_get_config_value(cfg, "caddy_gid", None),
+        default=get_config_value(
+            globals_cfg,
+            "services_gid",
+            get_config_value(globals_cfg, "caddy_gid", get_config_value(cfg, "caddy_gid", None)),
+        ),
         help="GID for the Caddy/Proxy Services sheet tab",
     )
     parser.add_argument(
         "--nodes-gid",
         type=int,
-        default=_get_config_value(cfg, "nodes_gid", None),
+        default=get_config_value(globals_cfg, "nodes_gid", get_config_value(cfg, "nodes_gid", None)),
         help="Optional: GID for the Nodes sheet tab (for backend_node -> IP lookup)",
     )
     parser.add_argument(
         "--template",
         type=Path,
-        default=Path(_get_config_value(cfg, "template", str(default_dir / "Caddyfile.template"))),
+        default=Path(get_config_value(cfg, "template", str(default_dir / "Caddyfile.template"))),
         help="Path to Caddyfile template (default: Caddyfile.template next to this script)",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path(_get_config_value(cfg, "output", str(default_dir / "downloads" / "Caddyfile"))),
+        default=Path(get_config_value(cfg, "output", str(default_dir / "downloads" / "Caddyfile"))),
         help="Output path for generated Caddyfile",
     )
     parser.add_argument(
         "--work-dir",
         type=Path,
-        default=Path(_get_config_value(cfg, "work_dir", str(default_dir / "downloads"))),
+        default=Path(get_config_value(cfg, "work_dir", str(default_dir / "downloads"))),
         help="Directory for downloaded/generated files",
     )
     parser.add_argument(
         "--dump-json",
         action="store_true",
-        default=bool(_get_config_value(cfg, "dump_json", False)),
+        default=bool(get_config_value(cfg, "dump_json", False)),
         help="If set, save normalized sheet rows to work_dir/caddy-services.json",
+    )
+
+    parser.add_argument(
+        "--caddy-ip",
+        dest="caddy_ip",
+        default=get_config_value(
+            globals_cfg,
+            "caddy_ip",
+            get_config_value(
+                cfg,
+                "caddy_ip",
+                get_config_value(cfg, "health_check_ip", "127.0.0.1"),
+            ),
+        ),
+        help=(
+            "Caddy proxy IP/hostname in the DMZ VLAN (used by the template for the health check listener). "
+            "Defaults to [globals].caddy_ip; override via this flag."
+        ),
+    )
+
+    # Backward-compatible alias for older configs/flags.
+    parser.add_argument(
+        "--health-check-ip",
+        dest="caddy_ip",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
     )
 
     parser.add_argument(
@@ -657,7 +490,12 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
-    config = load_config(args.config.expanduser().resolve(), args.debug)
+    if args.debug:
+        configure_logging(debug=True)
+        logger.debug("caddy: debug enabled")
+
+    config_path = args.config.expanduser().resolve()
+    config = load_toml_or_exit(config_path)
     cfg = get_effective_table(config, "caddy", legacy_root_fallback=True)
 
     if not args.sheet_url:
@@ -667,19 +505,17 @@ def main(argv: list[str] | None = None) -> int:
         print("Error: caddy_gid is required (set in config or pass --caddy-gid).", file=sys.stderr)
         return 2
 
-    work_dir = args.work_dir.expanduser().resolve()
+    work_dir = resolve_path_relative_to_config(config_path, args.work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    template_path = args.template.expanduser().resolve()
+    template_path = resolve_path_relative_to_config(config_path, args.template)
     if not template_path.exists():
         print(f"Template not found: {template_path}", file=sys.stderr)
         return 2
 
-    template_text = template_path.read_text(encoding="utf-8")
-
     caddy_url = build_sheet_url(args.sheet_url, int(args.caddy_gid))
     if args.debug:
-        print(f"[debug] Loading Caddy sheet CSV: {caddy_url}", file=sys.stderr)
+        logger.debug("caddy: loading Services sheet CSV: %s", caddy_url)
 
     try:
         services_df = pd.read_csv(caddy_url)
@@ -693,10 +529,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.nodes_gid is not None:
         nodes_url = build_sheet_url(args.sheet_url, int(args.nodes_gid))
         if args.debug:
-            print(f"[debug] Loading Nodes sheet CSV: {nodes_url}", file=sys.stderr)
+            logger.debug("caddy: loading Nodes sheet CSV: %s", nodes_url)
         try:
             nodes_df = pd.read_csv(nodes_url)
-            nodes_df = df_with_normalized_columns(nodes_df)
             nodes_lookup = load_nodes_lookup(nodes_df)
         except Exception as exc:
             print(f"Error: failed to read Nodes sheet CSV: {exc}", file=sys.stderr)
@@ -734,7 +569,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if unmatched and args.debug:
         for fqdn in unmatched:
-            print(f"[debug] No zone match for {fqdn}", file=sys.stderr)
+            logger.debug("caddy: no zone match for %s", fqdn)
 
     map_entries_rendered: dict[str, list[str]] = {}
     handler_blocks_rendered: dict[str, list[str]] = {}
@@ -751,33 +586,57 @@ def main(argv: list[str] | None = None) -> int:
         generated_at,
     )
 
-    rendered = render_template(template_text, server_blocks)
+    if not str(args.caddy_ip).strip():
+        print(
+            "Error: caddy_ip is required (set in config or pass --caddy-ip).",
+            file=sys.stderr,
+        )
+        return 2
 
-    output_path = args.output.expanduser().resolve()
+    rendered = render_jinja_template(
+        template_path=template_path,
+        context={
+            "generated_at": generated_at,
+            "server_blocks_text": "\n".join(server_blocks).rstrip(),
+            "caddy_ip": str(args.caddy_ip).strip(),
+        },
+    )
+
+    output_path = resolve_path_relative_to_config(config_path, args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(rendered, encoding="utf-8")
     print(f"Saved generated Caddyfile to {output_path}")
 
+    deploy_config = cfg.get("caddy_deploy", {})
+    if not isinstance(deploy_config, dict):
+        deploy_config = {}
+
+    host = args.caddy_host or deploy_config.get("host")
+    username = args.caddy_username or deploy_config.get("username")
+    remote_path = args.caddy_path or deploy_config.get("path")
+    restart_command = args.caddy_restart or deploy_config.get("restart_command")
+    port_value = args.caddy_port or deploy_config.get("port")
+
+    port = None
+    if port_value is not None:
+        try:
+            port = int(port_value)
+        except (TypeError, ValueError):
+            print("Caddy port must be an integer.", file=sys.stderr)
+            return 2
+
+    missing_deploy: list[str] = []
+    if not host:
+        missing_deploy.append("host")
+    if not username:
+        missing_deploy.append("username")
+    if not remote_path:
+        missing_deploy.append("path")
+    if not restart_command:
+        missing_deploy.append("restart_command")
+
     if args.apply:
-        deploy_config = cfg.get("caddy_deploy", {})
-        if not isinstance(deploy_config, dict):
-            deploy_config = {}
-
-        host = args.caddy_host or deploy_config.get("host")
-        username = args.caddy_username or deploy_config.get("username")
-        remote_path = args.caddy_path or deploy_config.get("path")
-        restart_command = args.caddy_restart or deploy_config.get("restart_command")
-        port_value = args.caddy_port or deploy_config.get("port")
-
-        port = None
-        if port_value is not None:
-            try:
-                port = int(port_value)
-            except (TypeError, ValueError):
-                print("Caddy port must be an integer.", file=sys.stderr)
-                return 2
-
-        if not host or not username or not remote_path or not restart_command:
+        if missing_deploy:
             print(
                 "Caddy deploy settings (host, username, path, restart_command) are required.",
                 file=sys.stderr,
@@ -798,6 +657,23 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Caddy deploy failed: {exc}", file=sys.stderr)
             return 1
         print("Deployed Caddyfile and restarted Caddy.")
+    else:
+        print("Dry run (no --apply): no remote changes made")
+        print(f"- generated: {output_path}")
+        if missing_deploy:
+            print(
+                "- would apply: skipped (missing deploy settings: " + ", ".join(missing_deploy) + ")"
+            )
+            print(
+                "- hint: set [caddy].caddy_deploy.{host,username,path,restart_command} in config.toml "
+                "or pass --caddy-host/--caddy-username/--caddy-path/--caddy-restart"
+            )
+        else:
+            target = f"{username}@{host}"
+            effective_port = port or 22
+            print(f"- would scp: {output_path} -> {target}:{remote_path} (port {effective_port})")
+            print(f"- would ssh: {target}: {restart_command}")
+        print("Re-run with --apply to perform these actions.")
 
     return 0
 

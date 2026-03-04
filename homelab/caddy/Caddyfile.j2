@@ -1,0 +1,13 @@
+{
+    email tommoyer@gmail.com
+}
+
+# ------------------------------------------------------------------
+# Server blocks generated from Google Sheets
+# ------------------------------------------------------------------
+{{ server_blocks_text }}
+
+http://{{ caddy_ip }} {
+    respond /healthz "ok" 200
+    respond "not found" 404
+}

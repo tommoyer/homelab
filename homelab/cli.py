@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from dataclasses import dataclass
 
 from . import (
     caddyfile,
+    deploy,
     mikrotik_backup,
     mikrotik_dhcp_leases,
     mikrotik_firewall,
     pihole,
 )
+from .logging_utils import configure_logging
+
+logger = logging.getLogger(__name__)
 
 COMMANDS: dict[str, tuple[str, object]] = {
     "run": ("Run multiple features", object()),
@@ -19,17 +24,49 @@ COMMANDS: dict[str, tuple[str, object]] = {
     "mikrotik-dhcp": ("Generate/apply MikroTik DHCP static leases", mikrotik_dhcp_leases),
     "mikrotik-firewall": ("Generate/apply MikroTik firewall dstnat/filter rules", mikrotik_firewall),
     "caddy": ("Generate/deploy Caddyfile from Google Sheets", caddyfile),
+    "deploy": ("Deploy a complete node/service", deploy),
 }
 
 
 def _print_help() -> None:
-    print("usage: python -m homelab [-h] <command> [args...]\n")
+    print("usage: python -m homelab [-h] [--debug] <command> [args...]\n")
     print("Unified CLI for this homelab repo.\n")
+    print("global options:")
+    print("  --debug           Enable verbose debug logging to stderr")
+    print("")
     print("commands:")
     width = max(len(name) for name in COMMANDS)
     for name, (desc, _) in COMMANDS.items():
         print(f"  {name.ljust(width)}  {desc}")
     print("\nRun: python -m homelab <command> --help")
+
+
+def _parse_global_options(argv: list[str]) -> tuple[bool, list[str]]:
+    """Parse global options that appear before the <command>.
+
+    We intentionally only consume options *before* the command name so that
+    subcommands can continue to support their own flags (including --debug).
+    """
+
+    debug = False
+    rest = list(argv)
+
+    while rest and rest[0].startswith("-"):
+        flag = rest.pop(0)
+
+        if flag in {"-h", "--help"}:
+            _print_help()
+            raise SystemExit(0)
+
+        if flag == "--debug":
+            debug = True
+            continue
+
+        print(f"Error: unknown global option: {flag}", file=sys.stderr)
+        _print_help()
+        raise SystemExit(2)
+
+    return debug, rest
 
 
 @dataclass(frozen=True)
@@ -52,8 +89,9 @@ def _build_run_parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help=(
-            "Forward --apply to apply-capable features (pihole, mikrotik-dhcp, mikrotik-firewall, caddy). "
-            "mikrotik-backup always performs a backup."
+            "Forward --apply to apply-capable features (pihole, mikrotik-dhcp, mikrotik-firewall, "
+            "caddy, mikrotik-backup). Without --apply, tools run in dry-run mode and print what "
+            "would be done."
         ),
     )
     parser.add_argument(
@@ -138,8 +176,10 @@ def _plan_run(argv: list[str]) -> _RunPlan:
     return _RunPlan(apply=bool(args.apply), yes=bool(args.yes), features=ordered)
 
 
-def _run_mode(argv: list[str]) -> int:
+def _run_mode(argv: list[str], *, debug: bool) -> int:
+    logger.debug("run: argv=%r debug=%s", argv, debug)
     plan = _plan_run(argv)
+    logger.debug("run: plan=%r", plan)
     if not plan.features:
         print("Nothing to do (all features disabled)", file=sys.stderr)
         return 0
@@ -147,9 +187,14 @@ def _run_mode(argv: list[str]) -> int:
     for feature in plan.features:
         try:
             if feature == "mikrotik-backup":
-                code = int(mikrotik_backup.main([]))
+                f_argv: list[str] = []
+                if plan.apply:
+                    f_argv.append("--apply")
+                code = int(mikrotik_backup.main(f_argv))
             elif feature == "mikrotik-dhcp":
                 f_argv: list[str] = []
+                if debug:
+                    f_argv.append("--debug")
                 if plan.apply:
                     f_argv.append("--apply")
                 if plan.yes:
@@ -157,6 +202,8 @@ def _run_mode(argv: list[str]) -> int:
                 code = int(mikrotik_dhcp_leases.main(f_argv))
             elif feature == "mikrotik-firewall":
                 f_argv = []
+                if debug:
+                    f_argv.append("--debug")
                 if plan.apply:
                     f_argv.append("--apply")
                 if plan.yes:
@@ -166,7 +213,11 @@ def _run_mode(argv: list[str]) -> int:
                 f_argv = ["--apply"] if plan.apply else []
                 code = int(pihole.main(f_argv))
             elif feature == "caddy":
-                f_argv = ["--apply"] if plan.apply else []
+                f_argv = []
+                if debug:
+                    f_argv.append("--debug")
+                if plan.apply:
+                    f_argv.append("--apply")
                 code = int(caddyfile.main(f_argv))
             else:
                 print(f"Error: unknown run feature: {feature}", file=sys.stderr)
@@ -186,6 +237,10 @@ def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
 
+    debug, argv = _parse_global_options(argv)
+    configure_logging(debug=debug)
+    logger.debug("global debug enabled")
+
     if not argv or argv[0] in {"-h", "--help"}:
         _print_help()
         return 0
@@ -193,8 +248,17 @@ def main(argv: list[str] | None = None) -> int:
     command = argv[0]
     cmd_argv = argv[1:]
 
+    # If global --debug was enabled, try to forward it to subcommands that
+    # already support their own --debug flag (preserves existing UX).
+    if debug and "--debug" not in cmd_argv and command in {"caddy", "mikrotik-dhcp", "mikrotik-firewall"}:
+        cmd_argv = ["--debug", *cmd_argv]
+
     if command == "run":
-        return _run_mode(cmd_argv)
+        # For run-mode we don't have a dedicated flag, but forwarding --debug to
+        # sub-tools makes their existing debug output visible.
+        if debug:
+            logger.debug("forwarding global --debug to run-mode subcommands")
+        return _run_mode(cmd_argv, debug=debug)
 
     entry = COMMANDS.get(command)
     if entry is None:
@@ -205,7 +269,9 @@ def main(argv: list[str] | None = None) -> int:
     _, module = entry
 
     try:
+        logger.debug("dispatch: command=%s argv=%r", command, cmd_argv)
         return int(module.main(cmd_argv))  # type: ignore[attr-defined]
     except KeyboardInterrupt:
         print("Aborted", file=sys.stderr)
         return 130
+
