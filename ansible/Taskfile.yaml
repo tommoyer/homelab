@@ -1,0 +1,94 @@
+version: "3"
+
+vars:
+  inventory: '{{default "./inventory/inventory-spreadsheet.py" .ANSIBLE_INVENTORY}}'
+  bootstrap_user: '{{default "root" .BOOTSTRAP_USER}}'
+  bootstrap_private_key: '{{default "" .BOOTSTRAP_PRIVATE_KEY}}'
+  # Targeting:
+  # - TARGET_HOSTS controls the play's `hosts:` (supports host patterns like `pve`, `node1`, `node1,node2`, `pve:&prod`, etc.)
+  # - ANSIBLE_LIMIT applies an additional `--limit` restriction (same pattern syntax)
+  # Back-compat: BOOTSTRAP_LIMIT is treated as ANSIBLE_LIMIT for the bootstrap task.
+  target_hosts: '{{default "" .TARGET_HOSTS}}'
+  ansible_limit: '{{default (default "" .BOOTSTRAP_LIMIT) .ANSIBLE_LIMIT}}'
+  bootstrap_ask_pass: '{{default "1" .BOOTSTRAP_ASK_PASS}}'
+
+tasks:
+  bootstrap:
+    desc: Bootstrap nodes for Ansible management (creates ansible user + installs ~/.ssh/ansible.pub).
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.TASKFILE_DIR}}/ansible.cfg"
+    preconditions:
+      - sh: "command -v ansible-playbook >/dev/null"
+        msg: "ansible-playbook is required"
+      - sh: "test -f playbooks/bootstrap.yaml"
+        msg: "playbooks/bootstrap.yaml not found (run from ansible/ or fix paths)"
+    cmds:
+      - >-
+        ansible-playbook
+        -i {{.inventory}}
+        -u {{.bootstrap_user}}
+        {{if ne .bootstrap_private_key ""}}--private-key {{.bootstrap_private_key}}{{end}}
+        {{if ne .ansible_limit ""}}--limit {{.ansible_limit}}{{end}}
+        {{if or (eq .bootstrap_ask_pass "1") (eq .bootstrap_ask_pass "true")}}--ask-pass{{end}}
+        {{if ne .target_hosts ""}}-e target_hosts={{.target_hosts}}{{end}}
+        {{.CLI_ARGS}}
+        playbooks/bootstrap.yaml
+
+  hardening:
+    desc: Run hardening playbook against pve nodes
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.TASKFILE_DIR}}/ansible.cfg"
+    preconditions:
+      - sh: "command -v ansible-playbook >/dev/null"
+        msg: "ansible-playbook is required"
+      - sh: "test -f playbooks/hardening.yaml"
+        msg: "playbooks/hardening.yaml not found (run from ansible/ or fix paths)"
+    cmds:
+      - >-
+        ansible-playbook
+        -i {{.inventory}}
+        {{if ne .ansible_limit ""}}--limit {{.ansible_limit}}{{end}}
+        {{if ne .target_hosts ""}}-e target_hosts={{.target_hosts}}{{end}}
+        {{.CLI_ARGS}}
+        playbooks/hardening.yaml
+
+  proxmox-dns:
+    desc: Apply proxmox DNS configuration (proxmox-dns playbook)
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.TASKFILE_DIR}}/ansible.cfg"
+    preconditions:
+      - sh: "command -v ansible-playbook >/dev/null"
+        msg: "ansible-playbook is required"
+      - sh: "test -f playbooks/proxmox-dns.yaml"
+        msg: "playbooks/proxmox-dns.yaml not found (run from ansible/ or fix paths)"
+    cmds:
+      - >-
+        ansible-playbook
+        -i {{.inventory}}
+        {{if ne .ansible_limit ""}}--limit {{.ansible_limit}}{{else}}--limit proxmox_dns{{end}}
+        {{if ne .target_hosts ""}}-e target_hosts={{.target_hosts}}{{end}}
+        {{.CLI_ARGS}}
+        playbooks/proxmox-dns.yaml
+
+  caddy-bootstrap:
+    desc: Build and install Caddy with Cloudflare DNS module (caddy-bootstrap playbook)
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.TASKFILE_DIR}}/ansible.cfg"
+    preconditions:
+      - sh: "command -v ansible-playbook >/dev/null"
+        msg: "ansible-playbook is required"
+      - sh: "test -f playbooks/caddy-bootstrap.yaml"
+        msg: "playbooks/caddy-bootstrap.yaml not found (run from ansible/ or fix paths)"
+    cmds:
+      - >-
+        ansible-playbook
+        -i {{.inventory}}
+        --ask-vault-pass
+        {{if ne .ansible_limit ""}}--limit {{.ansible_limit}}{{else}}--limit caddy{{end}}
+        {{if ne .target_hosts ""}}-e target_hosts={{.target_hosts}}{{end}}
+        {{.CLI_ARGS}}
+        playbooks/caddy-bootstrap.yaml

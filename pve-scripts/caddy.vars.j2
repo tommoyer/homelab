@@ -1,0 +1,31 @@
+# App-specific defaults for Caddy (caddy)
+# Generated on {{ generated_at }}
+
+var_unprivileged=1
+var_cpu=2
+var_ram=2048
+var_disk=6
+var_brg={{ node.bridge or 'vmbr0' }}
+var_net={{ node.net or 'dhcp' }}
+{% if node.gateway %}var_gateway={{ node.gateway }}{% endif %}
+{% if node.vlan %}var_vlan={{ node.vlan }}{% endif %}
+{# {% if node.ns %}var_ns={{ node.ns }}{% endif %} #}
+var_ipv6_method=auto
+var_ssh=yes
+{% if ssh_authorized_key %}var_ssh_authorized_key={{ ssh_authorized_key }}{% endif %}
+var_apt_cacher=no
+var_fuse=no
+var_tun=no
+var_gpu=no
+var_nesting=1
+var_keyctl=0
+var_mknod=0
+var_protection=no
+var_timezone=America/New_York
+var_tags=deploy
+var_verbose=no
+var_hostname={{ node.hostname }}
+{# {% if node.searchdomain %}var_searchdomain={{ node.searchdomain }}{% endif %} #}
+var_template_storage=cephfs
+var_container_storage=rbd
+

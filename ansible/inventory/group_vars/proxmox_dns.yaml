@@ -1,0 +1,23 @@
+---
+# Variables for the proxmox_dns group (spreadsheet role: "proxmox-dns").
+#
+# Preferred auth method is an API token:
+# 1) In Proxmox: Datacenter -> Permissions -> API Tokens
+# 2) Create token for e.g. root@pam, token id "ansible"
+# 3) Export the token secret in your shell before running Ansible.
+
+# Proxmox API endpoint (VIP or a node that serves the API)
+proxmox_api_host: "192.168.10.15"
+
+# Proxmox API user (must include realm)
+proxmox_api_user: "root@pam"
+
+# TLS: Proxmox often uses a self-signed cert
+proxmox_api_validate_certs: false
+
+# Token auth (preferred)
+proxmox_api_token_id: "root@pam!ansible"
+proxmox_api_token_secret: "{{ lookup('env', 'PROXMOX_API_TOKEN_SECRET') }}"
+
+# Password auth (fallback; only used if token secret is not provided)
+# proxmox_api_password: "{{ lookup('env', 'PROXMOX_PASSWORD') }}"

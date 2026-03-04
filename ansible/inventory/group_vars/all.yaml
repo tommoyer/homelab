@@ -1,0 +1,15 @@
+---
+# Global variables for all hosts
+ansible_python_interpreter: /usr/bin/python3
+
+# Authentik configuration
+# authentik_url: "https://authentik.yourdomain.com"
+# authentik_ldap_uri: "ldap://authentik.yourdomain.com:389"
+# authentik_ldap_base_dn: "dc=ldap,dc=goauthentik,dc=io"
+
+# Network defaults
+dns_servers:
+  - 192.168.10.11
+
+# Service defaults
+service_restart_policy: unless-stopped

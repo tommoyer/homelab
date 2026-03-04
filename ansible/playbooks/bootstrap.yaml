@@ -1,0 +1,98 @@
+---
+- name: Bootstrap new nodes for Ansible management
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: yes
+  remote_user: root  # Initial connection as root
+  vars:
+    bootstrap_user_name: ansible
+    bootstrap_user_home: /home/ansible
+    bootstrap_ssh_pubkey_path: "~/.ssh/ansible.pub"
+    bootstrap_ssh_key: "{{ lookup('file', bootstrap_ssh_pubkey_path) }}"  # Control node key
+  
+  tasks:
+    - name: Install essential packages
+      ansible.builtin.apt:
+        name:
+          - sudo
+          - python3
+          - python3-apt
+          - aptitude
+        state: present
+        update_cache: yes
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Create ansible group
+      ansible.builtin.group:
+        name: "{{ bootstrap_user_name }}"
+        state: present
+
+    - name: Create ansible user
+      ansible.builtin.user:
+        name: "{{ bootstrap_user_name }}"
+        group: "{{ bootstrap_user_name }}"
+        groups: sudo
+        shell: /bin/bash
+        create_home: yes
+        home: "{{ bootstrap_user_home }}"
+        state: present
+
+    - name: Ensure ansible remote_tmp directory exists
+      ansible.builtin.file:
+        path: "{{ bootstrap_user_home }}/.ansible/tmp"
+        state: directory
+        owner: "{{ bootstrap_user_name }}"
+        group: "{{ bootstrap_user_name }}"
+        mode: '0700'
+
+    - name: Set up authorized_keys for ansible user
+      ansible.posix.authorized_key:
+        user: "{{ bootstrap_user_name }}"
+        state: present
+        key: "{{ bootstrap_ssh_key }}"
+        exclusive: yes
+
+    - name: Configure passwordless sudo for ansible user
+      ansible.builtin.copy:
+        content: "{{ bootstrap_user_name }} ALL=(ALL) NOPASSWD:ALL\n"
+        dest: "/etc/sudoers.d/{{ bootstrap_user_name }}"
+        mode: '0440'
+        validate: 'visudo -cf %s'
+
+    - name: Test ansible user sudo access
+      ansible.builtin.command: sudo -l
+      become: yes
+      become_user: "{{ bootstrap_user_name }}"
+      changed_when: false
+
+    # Disable console autologin by removing override.conf
+    - name: Remove getty/console autologin override
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/getty@tty1.service.d/override.conf
+        - /etc/systemd/system/container-getty@1.service.d/override.conf
+      notify: Reload systemd
+
+    # Enable root login and password auth in SSH
+    - name: Enable PermitRootLogin in sshd_config
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?{{ item.regex }}'
+        line: "{{ item.line }}"
+        state: present
+        backup: true
+      loop:
+        - { regex: 'PermitRootLogin', line: 'PermitRootLogin yes' }
+        - { regex: 'PasswordAuthentication', line: 'PasswordAuthentication yes' }
+      notify: Restart SSH
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: true
+
+    - name: Restart SSH
+      service:
+        name: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
+        state: restarted

@@ -1,0 +1,255 @@
+---
+- name: Build and install Caddy with Cloudflare DNS module
+  hosts: "{{ target_hosts | default('caddy') }}"
+  gather_facts: yes
+  become: yes
+
+  vars:
+    caddy_cloudflare_plugin: "github.com/caddy-dns/cloudflare"
+    caddy_install_fallback_path: "/usr/bin/caddy"
+    xcaddy_gobin: "/usr/local/bin"
+    xcaddy_path: "/usr/local/bin/xcaddy"
+    caddy_force_rebuild: false
+
+  vars_files:
+    # ansible-vault encrypted; must define caddy_cf_api_token
+    - "{{ playbook_dir }}/../inventory/group_vars/all/vault.yaml"
+
+  handlers:
+    - name: systemd daemon-reload
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: ansible_service_mgr == 'systemd'
+
+    - name: restart caddy
+      ansible.builtin.systemd:
+        name: caddy
+        state: restarted
+      failed_when: false
+      when: ansible_service_mgr == 'systemd'
+
+  tasks:
+    - name: Resolve current caddy install path (if present)
+      ansible.builtin.command: command -v caddy
+      register: _caddy_which
+      changed_when: false
+      failed_when: false
+
+    - name: Set caddy install path
+      ansible.builtin.set_fact:
+        caddy_install_path: >-
+          {{
+            (_caddy_which.stdout | trim)
+            if ((_caddy_which.stdout | default('') | trim) | length) > 0
+            else caddy_install_fallback_path
+          }}
+
+    - name: Check whether caddy already has Cloudflare DNS module
+      ansible.builtin.command: caddy list-modules
+      register: _caddy_modules_before
+      changed_when: false
+      failed_when: false
+      when:
+        - not caddy_force_rebuild | bool
+        - (_caddy_which.rc | default(1)) == 0
+
+    - name: Decide whether rebuild is needed
+      ansible.builtin.set_fact:
+        caddy_cloudflare_module_present: >-
+          {{
+            (
+              (_caddy_modules_before.stdout | default(''))
+              | regex_search('^dns\\.providers\\.cloudflare$', multiline=True)
+            ) is not none
+          }}
+        caddy_rebuild_needed: >-
+          {{
+            (caddy_force_rebuild | bool)
+            or (
+              (
+                (_caddy_modules_before.stdout | default(''))
+                | regex_search('^dns\\.providers\\.cloudflare$', multiline=True)
+              ) is none
+            )
+          }}
+
+    - name: Assert supported package manager (apt/apk)
+      ansible.builtin.assert:
+        that:
+          - ansible_pkg_mgr in ['apt', 'apk']
+        fail_msg: >-
+          Unsupported package manager '{{ ansible_pkg_mgr }}'.
+          This playbook currently supports apt (Debian/Ubuntu) and apk (Alpine),
+          matching the original bootstrap script.
+      when: caddy_rebuild_needed | bool
+
+    - name: Install build dependencies (apt)
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - golang-go
+          - git
+          - libcap2-bin
+        state: present
+        update_cache: yes
+      when:
+        - caddy_rebuild_needed | bool
+        - ansible_pkg_mgr == 'apt'
+
+    - name: Install build dependencies (apk)
+      ansible.builtin.package:
+        name:
+          - ca-certificates
+          - curl
+          - go
+          - git
+          - libcap
+        state: present
+      when:
+        - caddy_rebuild_needed | bool
+        - ansible_pkg_mgr == 'apk'
+
+    - name: Ensure xcaddy install directory exists
+      ansible.builtin.file:
+        path: "{{ xcaddy_gobin }}"
+        state: directory
+        mode: '0755'
+      when: caddy_rebuild_needed | bool
+
+    - name: Check whether xcaddy is already installed
+      ansible.builtin.stat:
+        path: "{{ xcaddy_path }}"
+      register: _xcaddy_stat
+      when: caddy_rebuild_needed | bool
+
+    - name: Install xcaddy via go install (when missing)
+      ansible.builtin.command: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+      environment:
+        GOBIN: "{{ xcaddy_gobin }}"
+      args:
+        creates: "{{ xcaddy_path }}"
+      when:
+        - caddy_rebuild_needed | bool
+        - not (_xcaddy_stat.stat.exists | default(false))
+
+    - name: Create temporary build directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: caddy-build-
+      register: _caddy_build_dir
+      when: caddy_rebuild_needed | bool
+
+    - name: Build caddy with Cloudflare DNS module
+      ansible.builtin.command: >-
+        {{ xcaddy_path }} build
+        --with {{ caddy_cloudflare_plugin }}
+        --output {{ _caddy_build_dir.path }}/caddy
+      args:
+        chdir: "{{ _caddy_build_dir.path }}"
+      when: caddy_rebuild_needed | bool
+
+    - name: Check whether an existing caddy binary is present at install path
+      ansible.builtin.stat:
+        path: "{{ caddy_install_path }}"
+      register: _caddy_existing
+      when: caddy_rebuild_needed | bool
+
+    - name: Get UTC timestamp for backup filename
+      ansible.builtin.command: date -u +%Y%m%dT%H%M%SZ
+      register: _utc_stamp
+      changed_when: false
+      when:
+        - caddy_rebuild_needed | bool
+        - _caddy_existing.stat.exists | default(false)
+
+    - name: Backup existing caddy binary (if present)
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ caddy_install_path }}"
+        dest: "{{ caddy_install_path }}.bak.{{ _utc_stamp.stdout | trim }}"
+        mode: preserve
+      when:
+        - caddy_rebuild_needed | bool
+        - _caddy_existing.stat.exists | default(false)
+
+    - name: Install newly built caddy binary
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ _caddy_build_dir.path }}/caddy"
+        dest: "{{ caddy_install_path }}"
+        mode: '0755'
+      notify: restart caddy
+      when: caddy_rebuild_needed | bool
+
+    - name: Check whether setcap is available
+      ansible.builtin.command: command -v setcap
+      register: _setcap_which
+      changed_when: false
+      failed_when: false
+      when: caddy_rebuild_needed | bool
+
+    - name: Allow binding to 80/443 without running as root (best-effort)
+      ansible.builtin.command: "setcap cap_net_bind_service=+ep {{ caddy_install_path }}"
+      changed_when: false
+      failed_when: false
+      when:
+        - caddy_rebuild_needed | bool
+        - (_setcap_which.rc | default(1)) == 0
+
+    - name: Ensure systemd override directory exists for caddy
+      ansible.builtin.file:
+        path: /etc/systemd/system/caddy.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: ansible_service_mgr == 'systemd'
+
+    - name: Configure Cloudflare API token for caddy via systemd override
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/caddy.service.d/override.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Service]
+          Environment="CLOUDFLARE_API_TOKEN={{ caddy_cf_api_token }}"
+      no_log: true
+      notify:
+        - systemd daemon-reload
+        - restart caddy
+      when: ansible_service_mgr == 'systemd'
+
+    - name: List caddy modules after install
+      ansible.builtin.command: "{{ caddy_install_path }} list-modules"
+      register: _caddy_modules_after
+      changed_when: false
+      when: caddy_rebuild_needed | bool
+
+    - name: Assert Cloudflare DNS module is present
+      ansible.builtin.assert:
+        that:
+          - (
+              (_caddy_modules_after.stdout | default(''))
+              | regex_search('^dns\\.providers\\.cloudflare$', multiline=True)
+            ) is not none
+        fail_msg: >-
+          Cloudflare DNS module was not found in the installed Caddy binary.
+          Expected to see: dns.providers.cloudflare
+      when: caddy_rebuild_needed | bool
+
+    - name: Cleanup temporary build directory
+      ansible.builtin.file:
+        path: "{{ _caddy_build_dir.path }}"
+        state: absent
+      when:
+        - caddy_rebuild_needed | bool
+        - _caddy_build_dir is defined
+
+    - name: Report status
+      ansible.builtin.debug:
+        msg:
+          - "Caddy install path: {{ caddy_install_path }}"
+          - "Rebuild needed: {{ caddy_rebuild_needed | bool }}"
+          - "Cloudflare module present before: {{ caddy_cloudflare_module_present | default('unknown') }}"

@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
-import subprocess
+import logging
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,21 +13,26 @@ from .config import (
     merge_config_tables,
     resolve_path_relative_to_config,
 )
+from .mikrotik_utils import (
+    download_remote_file_via_scp,
+    export_router_config_via_ssh_to_file,
+    remove_remote_file,
+    sanitize_filename_component,
+)
 from .ssh import (
     prefix_sshpass,
     require_command,
     scp_base_args,
     ssh_base_args,
     ssh_control_path,
-    ssh_run,
     ssh_start_master,
     ssh_stop_master,
     sshpass_env_from_password_env,
 )
 
+_DEFAULT_KEEP = 3
 
-def _sanitize_filename_component(value: str) -> str:
-    return "".join([c if (c.isalnum() or c in "-_.") else "_" for c in value])
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -51,7 +55,7 @@ def _device_from_config(
     default_backup_dir: Path,
 ) -> Device:
     host = str(device_cfg.get("host", "")).strip()
-    user = str(device_cfg.get("user", defaults.get("user", ""))).strip()
+    user = str(device_cfg.get("user", defaults.get("mikrotik_user", defaults.get("user", "")))).strip()
     if not host or not user:
         raise ValueError(f"Device '{name}' must define host (and user or defaults.user)")
 
@@ -79,8 +83,7 @@ def _device_from_config(
 
 
 def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
-    default_config = Path(__file__).resolve().parent / "config.toml"
-
+    default_config = Path.cwd().resolve() / "config.toml"
     parser = argparse.ArgumentParser(
         description=(
             "Back up MikroTik RouterOS configuration by running /export over SSH, "
@@ -119,77 +122,70 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        default=None,
+        help=(
+            "Delete old backups for each device before downloading the new one, "
+            "keeping the most recent N files (see --keep). "
+            "Can also be set via mikrotik_backup.defaults.cleanup in config.toml."
+        ),
+    )
+    parser.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="Disable cleanup even if enabled in config.toml.",
+    )
+    parser.add_argument(
+        "--keep",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            f"Number of existing backups to retain per device when --cleanup is used "
+            f"(default: {_DEFAULT_KEEP}). The new backup is NOT counted. "
+            f"Can also be set via mikrotik_backup.defaults.keep in config.toml."
+        ),
+    )
+
+    parser.add_argument(
         "--apply",
         action="store_true",
-        help="No-op for compatibility; mikrotik-backup always performs a backup.",
+        help=(
+            "Perform the backup (runs /export over SSH, downloads via scp, then removes the remote file). "
+            "Without --apply, prints what would be done without touching the router."
+        ),
     )
 
     return parser
 
 
-def _export_router_config_via_ssh_to_file(
-    *,
-    ssh_args: list[str],
-    target: str,
-    export_base_name: str,
-    env: dict[str, str] | None,
-) -> str:
-    remote_file = f"{export_base_name}.rsc"
-
-    export_cmds = [
-        f"/export file={export_base_name} hide-sensitive=yes",
-        f"/export file={export_base_name} show-sensitive=no",
-        f"/export file={export_base_name}",
-    ]
-
-    last_error: str | None = None
-    for cmd in export_cmds:
-        try:
-            ssh_run(ssh_args=ssh_args, target=target, command=cmd, check=True, env=env)
-            return remote_file
-        except subprocess.CalledProcessError as exc:
-            last_error = (exc.stderr or exc.stdout or str(exc)).strip()
-            continue
-
-    raise RuntimeError(f"Failed to export router configuration via SSH: {last_error}")
+def _find_old_backups(*, device: Device) -> list[Path]:
+    """Return existing backup files for *device*, oldest first."""
+    safe_name = sanitize_filename_component(device.name)
+    safe_host = sanitize_filename_component(device.host)
+    pattern = f"router-export-{safe_name}-{safe_host}-*.rsc"
+    matches = sorted(device.backup_dir.glob(pattern))
+    return matches
 
 
-def _download_remote_file_via_scp_with_retries(
-    *,
-    scp_args: list[str],
-    target: str,
-    remote_filename: str,
-    local_path: Path,
-    attempts: int = 6,
-    delay_seconds: float = 0.5,
-    env: dict[str, str] | None,
-) -> None:
-    local_path.parent.mkdir(parents=True, exist_ok=True)
+def cleanup_old_backups(*, device: Device, keep: int, dry_run: bool = False) -> list[Path]:
+    """Delete old backups for *device*, keeping the *keep* most recent files.
 
-    last_error: str | None = None
-    for _ in range(attempts):
-        try:
-            subprocess.run(
-                [*scp_args, f"{target}:{remote_filename}", str(local_path)],
-                check=True,
-                env=env,
-            )
-            return
-        except subprocess.CalledProcessError as exc:
-            last_error = str(exc)
-            time.sleep(delay_seconds)
+    Returns the list of paths that were (or would be, when *dry_run*) removed.
+    """
+    existing = _find_old_backups(device=device)
+    if len(existing) <= keep:
+        return []
 
-    raise RuntimeError(f"Failed to download export via scp after {attempts} attempts: {last_error}")
+    to_remove = existing[: len(existing) - keep]
 
+    if not dry_run:
+        for p in to_remove:
+            logger.info("Deleting old backup: %s", p)
+            p.unlink()
 
-def _remove_remote_file(*, ssh_args: list[str], target: str, remote_filename: str, env: dict[str, str] | None) -> None:
-    ssh_run(
-        ssh_args=ssh_args,
-        target=target,
-        command=f"/file remove {remote_filename}",
-        check=False,
-        env=env,
-    )
+    return to_remove
 
 
 def backup_device(*, device: Device) -> Path:
@@ -205,6 +201,7 @@ def backup_device(*, device: Device) -> Path:
         raise RuntimeError(f"SSH identity file not found: {device.ssh_identity_file}")
 
     target = f"{device.user}@{device.host}"
+    logger.debug("mikrotik-backup: target=%s port=%s", target, device.ssh_port)
     control_path = ssh_control_path(prefix="mikrotik", username=device.user, host=device.host, port=device.ssh_port)
 
     ssh_args = prefix_sshpass(
@@ -217,42 +214,59 @@ def backup_device(*, device: Device) -> Path:
     )
 
     timestamp = _dt.datetime.now(tz=_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    safe_name = _sanitize_filename_component(device.name)
-    safe_host = _sanitize_filename_component(device.host)
+    safe_name = sanitize_filename_component(device.name)
+    safe_host = sanitize_filename_component(device.host)
     export_base = f"router-export-{safe_name}-{safe_host}-{timestamp}"
 
-    local_path = device.backup_dir.expanduser().resolve() / f"{export_base}.rsc"
+    local_path = device.backup_dir / f"{export_base}.rsc"
+    logger.debug("mikrotik-backup: local_path=%s", local_path)
 
     try:
         ssh_start_master(ssh_args=ssh_args, target=target, env=run_env)
 
-        remote_filename = _export_router_config_via_ssh_to_file(
+        remote_filename = export_router_config_via_ssh_to_file(
             ssh_args=ssh_args,
             target=target,
             export_base_name=export_base,
             env=run_env,
         )
 
-        _download_remote_file_via_scp_with_retries(
+        download_remote_file_via_scp(
             scp_args=scp_args,
             target=target,
             remote_filename=remote_filename,
             local_path=local_path,
+            attempts=6,
+            delay_seconds=0.5,
             env=run_env,
         )
 
-        _remove_remote_file(ssh_args=ssh_args, target=target, remote_filename=remote_filename, env=run_env)
+        remove_remote_file(ssh_args=ssh_args, target=target, remote_filename=remote_filename, env=run_env)
     finally:
         ssh_stop_master(ssh_args=ssh_args, target=target, env=run_env)
 
     return local_path
 
 
+def plan_backup(*, device: Device) -> tuple[str, Path]:
+    """Return (remote_export_base, local_path) for a backup without executing it."""
+
+    timestamp = _dt.datetime.now(tz=_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe_name = sanitize_filename_component(device.name)
+    safe_host = sanitize_filename_component(device.host)
+    export_base = f"router-export-{safe_name}-{safe_host}-{timestamp}"
+    local_path = device.backup_dir / f"{export_base}.rsc"
+    return export_base, local_path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser(argv)
     args = parser.parse_args(argv)
 
+    logger.debug("mikrotik-backup: argv=%r", argv)
+
     config_path = args.config.expanduser().resolve()
+    logger.debug("mikrotik-backup: config_path=%s", config_path)
     cfg = load_toml_or_exit(config_path)
 
     globals_cfg = get_table(cfg, "globals")
@@ -322,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         devices.append(
             Device(
-                name=_sanitize_filename_component(args.mikrotik_host),
+                name=sanitize_filename_component(args.mikrotik_host),
                 host=str(args.mikrotik_host),
                 user=str(args.mikrotik_user),
                 ssh_port=int(args.ssh_port),
@@ -368,7 +382,47 @@ def main(argv: list[str] | None = None) -> int:
             password_env=str(args.password_env).strip() or None,
         )
 
+    # Resolve cleanup/keep: CLI flags > config.toml > built-in defaults.
+    cfg_cleanup = bool(defaults.get("cleanup", False))
+    cfg_keep = defaults.get("keep", _DEFAULT_KEEP)
+
+    if args.no_cleanup:
+        do_cleanup = False
+    elif args.cleanup is not None:
+        do_cleanup = True
+    else:
+        do_cleanup = cfg_cleanup
+
+    keep = int(args.keep if args.keep is not None else cfg_keep)
+    if keep < 0:
+        print("Error: --keep must be >= 0", file=sys.stderr)
+        return 2
+
+    if not bool(args.apply):
+        print("Dry run (no --apply): no remote changes made")
+        for device in devices:
+            export_base, local_path = plan_backup(device=device)
+            target = f"{device.user}@{device.host}"
+            print(f"- device: {device.name} ({target}, port {device.ssh_port})")
+            if do_cleanup:
+                stale = cleanup_old_backups(device=device, keep=keep, dry_run=True)
+                if stale:
+                    print(f"  - would delete {len(stale)} old backup(s) (keeping {keep}):")
+                    for p in stale:
+                        print(f"    - {p}")
+                else:
+                    print(f"  - nothing to clean up ({len(_find_old_backups(device=device))} <= {keep})")
+            print(f"  - would ssh: {target} run /export (producing {export_base}.rsc)")
+            print(f"  - would scp: {target}:{export_base}.rsc -> {local_path}")
+            print(f"  - would ssh: {target} remove {export_base}.rsc")
+        print("Re-run with --apply to perform these actions.")
+        return 0
+
     for device in devices:
+        if do_cleanup:
+            removed = cleanup_old_backups(device=device, keep=keep)
+            for p in removed:
+                print(f"Deleted old backup for {device.name}: {p}")
         try:
             path = backup_device(device=device)
         except Exception as exc:

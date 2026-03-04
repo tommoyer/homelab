@@ -1,15 +1,7 @@
-# Default config for the unified CLI (python -m homelab)
+# Unified default configuration for the homelab Python package.
 #
-# This file contains every configuration section/key used by:
-# - python -m homelab pihole
-# - python -m homelab mikrotik-dhcp
-# - python -m homelab mikrotik-firewall
-# - python -m homelab mikrotik-backup
-#
-# Notes:
-# - CLI flags override values in this file.
-# - Relative paths resolve relative to this file.
-
+# Each tool reads its own section (e.g. [pihole], [mikrotik_dhcp_leases]).
+# CLI flags always override values from this file.
 
 [globals]
 # Shared values used by multiple tools.
@@ -17,45 +9,51 @@
 # Google Sheets CSV export URL (must contain gid=0; tools substitute their specific gids)
 sheet_url = "https://docs.google.com/spreadsheets/d/1f4emn4uIPscEgOHtgmETODlTvz1eh2xZlnpBBNGQlWA/export?format=csv&gid=0"
 
-# Nodes sheet gid (used by multiple tools)
+# Sheet gids (used by multiple tools)
 nodes_gid = 344016240
+services_gid = 157827580
 
-# Optional shared MikroTik connection settings (used by mikrotik-dhcp + mikrotik-firewall)
-mikrotik_host = ""
-mikrotik_user = ""
+# DNS hostname of the Caddy server (used as a CNAME target by pihole when ingress=caddy)
+caddy_hostname = "caddy.dmz.moyer.wtf"
+
+# Caddy proxy IP in the DMZ VLAN (used by multiple tools)
+caddy_ip = "192.168.20.2"
+
+# Default MikroTik RouterOS connection target used by mikrotik-dhcp + mikrotik-firewall
+mikrotik_host = "192.168.10.1"
+mikrotik_user = "admin"
 
 # Example overrides (optional):
 # mikrotik_password_env = "MIKROTIK_PASSWORD"  # legacy alias for password_env
 
 # MikroTik RouterOS SSH defaults (used by mikrotik-dhcp/mikrotik-firewall/mikrotik-backup)
 ssh_port = 22
-user = "admin"
 
 # Optional password env var to use with sshpass (leave empty to use SSH keys/agent)
-password_env = ""
+password_env = "MIKROTIK_PASSWORD"
 
 # Optional SSH key path (passed as -i). Leave empty to use your SSH agent/defaults.
 ssh_identity_file = ""
 
-# Local backup destination
-backup_dir = "mikrotik/backups"
+# Public key used by Proxmox community-scripts when var_ssh=yes.
+# This file is read by the deploy tool and injected into rendered pve-scripts/*.vars.
+ssh_authorized_key_file = "~/.ssh/id_rsa.pub"
 
+# Local backup destination (can be overridden per-device)
+backup_dir = "./homelab/mikrotik/backups"
 
 [pihole]
-# Sheet gids
-dns_gid = 95412045
-
 # Example overrides (optional):
 # sheet_url = "https://.../export?format=csv&gid=0"  # defaults to globals.sheet_url
 # nodes_gid = 344016240                               # defaults to globals.nodes_gid
 
-# Template + output paths
-template = "homelab/pihole/pihole.toml.j2"
-output = "pihole/pihole.toml"
+# Template + output paths (relative paths resolve relative to this file)
+template = "./homelab/pihole/pihole.toml.j2"
+output = "./homelab/pihole/pihole.toml"
 
-# Pi-hole instance SSH settings (only required with --apply)
-pihole_user = ""
-pihole_host = ""
+# Pi-hole instance SSH settings (used with --apply)
+pihole_user = "root"
+pihole_host = "192.168.10.11"
 
 # Whether to use sudo for remote operations during --apply.
 use_sudo = false
@@ -64,22 +62,27 @@ use_sudo = false
 [mikrotik_backup.defaults]
 # Inherit from [globals] (and legacy [mikrotik_defaults] if present) unless overridden here.
 
+# When true, old backups are deleted before downloading a new one (--cleanup).
+cleanup = true
+
+# Number of existing backups to keep per device when cleanup is enabled (--keep).
+keep = 3
+
 # Example overrides (optional):
 # ssh_port = 22
 # user = "admin"
 # password_env = "MIKROTIK_PASSWORD"
 # ssh_identity_file = "~/.ssh/id_ed25519"
-# backup_dir = "mikrotik/backups"
+# backup_dir = "../mikrotik/backups"
 
-# Inventory example (optional):
-#
-# [mikrotik_backup.devices.router]
-# host = "192.168.10.1"
-# user = "admin"            # optional (defaults to mikrotik_backup.defaults.user)
-# ssh_port = 22              # optional
-# ssh_identity_file = ""     # optional
-# backup_dir = "mikrotik/backups"  # optional
-# password_env = ""          # optional
+[mikrotik_backup.devices.hexs]
+host = "192.168.10.1"
+
+[mikrotik_backup.devices.crs]
+host = "192.168.10.2"
+
+[mikrotik_backup.devices.cap_ax]
+host = "192.168.10.3"
 
 
 [mikrotik_dhcp_leases]
@@ -91,7 +94,7 @@ use_sudo = false
 # ssh_port = 22
 # password_env = "MIKROTIK_PASSWORD"
 # ssh_identity_file = "~/.ssh/id_ed25519"
-# backup_dir = "mikrotik/backups"
+# backup_dir = "../mikrotik/backups"
 
 # Nodes sheet column names
 lease_type_column = "Static/DHCP"
@@ -100,19 +103,15 @@ subnet_column = "Subnet"
 mac_column = "MAC Address"
 
 # Output file containing RouterOS CLI commands
-output = "mikrotik/mikrotik-dhcp-leases.rsc"
+output = "./homelab/mikrotik/mikrotik-dhcp-leases.rsc"
 
 # When running with --apply, the tool also downloads a full RouterOS /export
 # and writes it to this directory.
 
 
-# Verbose debug output
-debug = false
-
-
 [mikrotik_firewall]
-# Google Sheets CSV export URL containing 'gid=0' (the tool substitutes gids)
-# (If omitted, the tool will fall back to mikrotik_dhcp_leases.sheet_url and/or globals.sheet_url.)
+# Uses the same sheet_url and nodes_gid as [mikrotik_dhcp_leases] by default.
+
 
 # Example overrides (optional; all default to [globals] / [mikrotik_dhcp_leases] if omitted):
 # sheet_url = "https://.../export?format=csv&gid=0"
@@ -123,13 +122,9 @@ debug = false
 # password_env = "MIKROTIK_PASSWORD"
 # ssh_identity_file = "~/.ssh/id_ed25519"
 
-# GID for the Services sheet tab (required)
-# (This is named caddy_gid because it should be the same tab used by the Caddy generator.)
-caddy_gid = 0
-
 # One or more Caddy proxy IPs in the DMZ VLAN.
-# May also be provided at runtime via --caddy-ip.
-caddy_ips = []
+# Defaults to [globals].caddy_ip if omitted. May also be provided at runtime via --caddy-ip.
+# caddy_ips = ["192.168.20.2"]
 
 # Interface names (match your RouterOS config).
 dmz_interface = "vlan20-dmz"
@@ -139,18 +134,14 @@ homelab_interface = "vlan30-homelab"
 caddy_default_backend_port = 80
 
 # Output script path
-output = "mikrotik/mikrotik-firewall.rsc"
-
-# Verbose debug output
-debug = false
-
-# DHCP server selection overrides (optional)
-# dhcp_server_by_subnet = { "192.168.10.0/24" = "dhcp-lan" }
+output = "./homelab/mikrotik/mikrotik-firewall.rsc"
 
 
 [caddy]
 # Caddyfile generator configuration.
 # This section inherits from [globals] (e.g. sheet_url/nodes_gid) unless overridden here.
+
+
 
 # Sheet configuration
 # sheet_url = "https://.../export?format=csv&gid=0"  # defaults to globals.sheet_url
@@ -158,15 +149,23 @@ debug = false
 # nodes_gid = 344016240                              # optional (backend hostname->IP lookup)
 
 # Filesystem paths
-# template = "caddy/Caddyfile.template"              # default: network.old/caddy/Caddyfile.template
-# output = "caddy/Caddyfile"                        # default: network.old/caddy/downloads/Caddyfile
-# work_dir = "caddy/downloads"                      # default: network.old/caddy/downloads
+template = "./homelab/caddy/Caddyfile.j2"           # default: network.old/caddy/Caddyfile.template
+output = "./homelab/caddy/Caddyfile"                     # default: network.old/caddy/downloads/Caddyfile
+work_dir = "./homelab/caddy/downloads"                    # default: network.old/caddy/downloads
 # dump_json = false
 
 # Zones
-# caddy_zones = [
-#   { zone = "example.com", wildcard = true, redirect_www = false },
-# ]
+caddy_zones = [
+  { zone = "moyer.wtf", wildcard = true, redirect_www = false },
+  { zone = "thomasmoyer.org", wildcard = true, redirect_www = false },
+]
+
+[caddy.caddy_deploy]
+host = "caddy.dmz.moyer.wtf"              # ssh target host
+username = "root"                          # ssh username
+path = "/etc/caddy/Caddyfile"               # remote destination path
+restart_command = "sudo systemctl reload caddy"  # command run over ssh
+port = 22
 
 # Optional deploy settings for --apply
 # caddy_deploy = {
@@ -176,3 +175,8 @@ debug = false
 #   path = "/etc/caddy/Caddyfile",
 #   restart_command = "systemctl reload caddy",
 # }
+
+[deploy]
+proxmox_host = "192.168.10.10"
+proxmox_user = "root@pam"
+proxmox_password_env = "PROXMOX_PASSWORD"
