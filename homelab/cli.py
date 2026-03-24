@@ -260,4 +260,3 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("Aborted", file=sys.stderr)
         return 130
-
