@@ -1,0 +1,106 @@
+---
+# Deploy a Docker Compose service to hosts with the "docker" role.
+#
+# For each targeted host this playbook expects:
+#   templates/<hostname>-docker-compose.yaml   (required, Jinja2)
+#   templates/<hostname>.env.j2                (optional, Jinja2 – skipped if absent)
+#
+# Usage:
+#   ansible-playbook playbooks/docker-compose.yaml
+#   ansible-playbook playbooks/docker-compose.yaml --limit myhost
+#   ansible-playbook playbooks/docker-compose.yaml -e service_name=myapp
+#
+# Variables:
+#   service_name        Name of the service directory under compose_base_dir.
+#                       Defaults to inventory_hostname.
+#   compose_base_dir    Parent directory for all services. Default: /home/ansible
+#
+- name: Deploy Docker Compose service
+  hosts: docker
+  gather_facts: yes
+  become: yes
+
+  vars:
+    service_name: "{{ inventory_hostname }}"
+    compose_base_dir: /home/ansible
+    compose_deploy_dir: "{{ compose_base_dir }}/{{ service_name }}"
+    _compose_template: "{{ playbook_dir }}/../templates/{{ inventory_hostname }}-docker-compose.yaml"
+    _env_template: "{{ playbook_dir }}/../templates/{{ inventory_hostname }}.env.j2"
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # Pre-flight checks (run on controller, not on the remote host)
+    # -------------------------------------------------------------------------
+    - name: Check whether docker-compose template exists on controller
+      ansible.builtin.stat:
+        path: "{{ _compose_template }}"
+      delegate_to: localhost
+      become: false
+      register: _compose_template_stat
+
+    - name: Fail when no compose template found for host
+      ansible.builtin.fail:
+        msg: >-
+          No compose template found for host '{{ inventory_hostname }}'.
+          Expected: {{ _compose_template }}
+      when: not _compose_template_stat.stat.exists
+
+    - name: Check whether .env template exists on controller
+      ansible.builtin.stat:
+        path: "{{ _env_template }}"
+      delegate_to: localhost
+      become: false
+      register: _env_template_stat
+
+    # -------------------------------------------------------------------------
+    # Directory layout
+    # -------------------------------------------------------------------------
+    - name: Ensure service directory exists
+      ansible.builtin.file:
+        path: "{{ compose_deploy_dir }}"
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0750"
+
+    # -------------------------------------------------------------------------
+    # Deploy compose file and optional .env
+    # -------------------------------------------------------------------------
+    - name: Deploy docker-compose.yaml
+      ansible.builtin.template:
+        src: "{{ _compose_template }}"
+        dest: "{{ compose_deploy_dir }}/docker-compose.yaml"
+        owner: ansible
+        group: ansible
+        mode: "0640"
+      register: _compose_file
+
+    - name: Deploy .env file
+      ansible.builtin.template:
+        src: "{{ _env_template }}"
+        dest: "{{ compose_deploy_dir }}/.env"
+        owner: ansible
+        group: ansible
+        mode: "0600"
+      when: _env_template_stat.stat.exists
+      register: _env_file
+
+    # -------------------------------------------------------------------------
+    # Pull images and (re)start services
+    # -------------------------------------------------------------------------
+    - name: Pull Docker images
+      ansible.builtin.command:
+        cmd: docker compose pull
+        chdir: "{{ compose_deploy_dir }}"
+      register: _compose_pull
+      changed_when: "'Pulled' in _compose_pull.stdout"
+
+    - name: Start services (docker compose up -d)
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ compose_deploy_dir }}"
+      register: _compose_up
+      changed_when: >-
+        'Started' in _compose_up.stdout or
+        'Created' in _compose_up.stdout or
+        'Recreated' in _compose_up.stdout

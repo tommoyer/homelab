@@ -1,0 +1,6 @@
+# /etc/postfix/generic – Managed by Ansible (smtp-relay playbook). Do not edit manually.
+# Rewrites envelope sender addresses before handing mail to the upstream provider.
+# Prevents unverified senders (e.g. root@) from being rejected by the provider.
+{% for mapping in smtp_relay_generic_maps %}
+{{ mapping.from }} {{ mapping.to }}
+{% endfor %}

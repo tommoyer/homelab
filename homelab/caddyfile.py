@@ -267,10 +267,6 @@ def collect_proxy_services_from_sheet(
 
     for idx, row in services_df.iterrows():
         row_id = int(cast(int, idx))
-        enabled = parse_bool(row.get("frontend_enabled"), default=False)
-        if not enabled:
-            continue
-
         ingress = as_str(row.get("ingress")).lower()
         if ingress != "caddy":
             continue

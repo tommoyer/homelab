@@ -1,0 +1,111 @@
+{# 
+RouterOS Firewall Filter Template
+Jinja2 template for generating firewall filter rules
+Variables expected:
+  - exceptions: list of exception rules (dicts with chain, src_zone, dst_zone, protocol, port, etc)
+  - matrix_rules: list of zone matrix rules (dicts with chain, src_zone, dst_zone, etc)
+  - interface_lists: dict with LAN and WAN interface lists
+#}
+# ===== FIREWALL FILTER RESET =====
+# Remove all existing filter rules to ensure clean state
+/ip firewall filter remove [find];
+
+# ===== SECTION 1: INPUT CHAIN - PROTECT THE ROUTER =====
+# Traffic destined TO the router itself (management, services running on router)
+# Rule selection: Use INPUT chain when dst is the router IP or router services
+
+# Accept ICMP after RAW chain processing
+/ip firewall filter add chain=input action=accept protocol=icmp comment="STATIC: Accept ICMP to router for diagnostics";
+
+# Accept established/related connections to router
+/ip firewall filter add chain=input action=accept connection-state=established,related,untracked comment="STATIC: Accept established/related to router";
+
+# Accept management from mgmt zone to router
+/ip firewall filter add chain=input action=accept in-interface-list=LAN src-address-list=mgmt-lan comment="STATIC: Allow mgmt zone full access to router";
+
+# Accept DHCP to router from LAN
+/ip firewall filter add chain=input action=accept protocol=udp dst-port=67,68 in-interface-list=LAN comment="STATIC: Allow DHCP requests to router";
+
+{# Custom input rules can be added here if needed #}
+{% if custom_input_rules %}
+{% for rule in custom_input_rules %}
+/ip firewall filter add chain=input {{ rule.params }} comment="{{ rule.comment }}";
+{% endfor %}
+{% endif %}
+
+# Drop all other input not from LAN
+/ip firewall filter add chain=input action=drop in-interface-list=!LAN comment="STATIC: Drop all input not from LAN";
+
+# ===== SECTION 2: FORWARD CHAIN TOP - CONNECTION TRACKING =====
+# Traffic passing THROUGH the router between interfaces
+# Rule selection: Use FORWARD chain when traffic goes from one interface to another
+
+# FastTrack established connections for performance
+/ip firewall filter add chain=forward action=fasttrack-connection connection-state=established,related hw-offload=yes comment="STATIC: FastTrack for performance";
+
+# Accept established/related connections
+/ip firewall filter add chain=forward action=accept connection-state=established,related,untracked comment="STATIC: Accept established/related forwarded traffic";
+
+# Drop invalid connection states
+/ip firewall filter add chain=forward action=drop connection-state=invalid comment="STATIC: Drop invalid connection states";
+
+# ===== SECTION 3: ZONE EXCEPTIONS - SPECIFIC ALLOW RULES =====
+# High-priority specific rules that override zone matrix defaults
+# These rules are processed BEFORE zone matrix rules
+{% if exceptions %}
+{% for exception in exceptions %}
+/ip firewall filter add chain={{ exception.chain }} \
+{% if exception.action %}action={{ exception.action }} {% endif %}\
+{% if exception.protocol %}protocol={{ exception.protocol }} {% endif %}\
+{% if exception.src_address_list %}src-address-list={{ exception.src_address_list }} {% endif %}\
+{% if exception.dst_address_list %}dst-address-list={{ exception.dst_address_list }} {% endif %}\
+{% if exception.dst_port %}dst-port={{ exception.dst_port }} {% endif %}\
+{% if exception.connection_state %}connection-state={{ exception.connection_state }} {% endif %}\
+{% if exception.in_interface %}in-interface={{ exception.in_interface }} {% endif %}\
+{% if exception.out_interface %}out-interface={{ exception.out_interface }} {% endif %}\
+comment="EXCEPTION: {{ exception.comment }}";
+{% endfor %}
+{% else %}
+# No exception rules defined
+{% endif %}
+
+# ===== SECTION 4: ZONE MATRIX RULES - INTER-ZONE POLICIES =====
+# Generated rules based on zone matrix (allow/deny between zones)
+{% if matrix_rules %}
+{% for rule in matrix_rules %}
+/ip firewall filter add chain={{ rule.chain }} \
+{% if rule.action %}action={{ rule.action }} {% endif %}\
+{% if rule.protocol %}protocol={{ rule.protocol }} {% endif %}\
+{% if rule.src_address_list %}src-address-list={{ rule.src_address_list }} {% endif %}\
+{% if rule.dst_address_list %}dst-address-list={{ rule.dst_address_list }} {% endif %}\
+{% if rule.dst_port %}dst-port={{ rule.dst_port }} {% endif %}\
+{% if rule.connection_state %}connection-state={{ rule.connection_state }} {% endif %}\
+{% if rule.in_interface %}in-interface={{ rule.in_interface }} {% endif %}\
+{% if rule.out_interface %}out-interface={{ rule.out_interface }} {% endif %}\
+{% if rule.in_interface_list %}in-interface-list={{ rule.in_interface_list }} {% endif %}\
+{% if rule.out_interface_list %}out-interface-list={{ rule.out_interface_list }} {% endif %}\
+comment="MATRIX: {{ rule.comment }}";
+{% endfor %}
+{% else %}
+# No matrix rules defined
+{% endif %}
+
+# ===== SECTION 5: WAN FORWARD PROTECTION =====
+# Drop WAN to LAN traffic that is not destination NAT'd
+/ip firewall filter add chain=forward action=drop connection-nat-state=!dstnat connection-state=new in-interface-list=WAN comment="STATIC: Drop WAN->LAN not dstnat";
+
+# ===== SECTION 6: FORWARD CHAIN FOOTER - DEFAULT DENY =====
+# Drop everything else not explicitly allowed
+/ip firewall filter add chain=forward action=drop comment="STATIC: Default deny all other forward traffic";
+
+#
+# INPUT vs FORWARD Chain Selection Algorithm:
+# - INPUT chain: Packet destination is the router itself (router IP, router services like DNS, DHCP, SSH to router)
+# - FORWARD chain: Packet is being routed between two different interfaces/networks (inter-VLAN, LAN to WAN, etc)
+# 
+# Examples:
+# - Client 192.168.100.50 -> 192.168.10.1 (router mgmt IP) SSH = INPUT chain
+# - Client 192.168.100.50 -> 192.168.10.11 (pihole) DNS = FORWARD chain
+# - Client 192.168.100.50 -> 8.8.8.8 (internet) = FORWARD chain
+# - Router itself -> internet for updates = OUTPUT chain (not covered in this template)
+#

@@ -32,3 +32,5 @@ Thumbs.db
 network-configs/cache
 
 external_records.json
+
+.vault-password

@@ -1,0 +1,3 @@
+# /etc/postfix/sasl_passwd – Managed by Ansible (smtp-relay playbook). Do not edit manually.
+# Format: [host]:port  login:password
+[{{ smtp_relay_relayhost }}]:{{ smtp_relay_relayhost_port }} {{ smtp_sasl_login }}:{{ smtp_sasl_password }}
