@@ -1,0 +1,52 @@
+# /etc/postfix/main.cf – Managed by Ansible (smtp-relay playbook). Do not edit manually.
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+myhostname = {{ smtp_relay_myhostname }}
+myorigin = {{ smtp_relay_myorigin }}
+mydomain = {{ smtp_relay_mydomain }}
+
+# ---------------------------------------------------------------------------
+# Network
+# ---------------------------------------------------------------------------
+# Listen on all interfaces so LAN clients can reach port 25.
+inet_interfaces = all
+inet_protocols = ipv4
+
+# ---------------------------------------------------------------------------
+# Local delivery
+# Deliver DSNs and bounces locally rather than forwarding them upstream.
+# ---------------------------------------------------------------------------
+mydestination = $myhostname, localhost.$mydomain, localhost, $mydomain
+
+# ---------------------------------------------------------------------------
+# Relay access control
+# Only clients in mynetworks may relay through this host.
+# ---------------------------------------------------------------------------
+mynetworks = {{ smtp_relay_mynetworks | join(', ') }}
+smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination
+
+# ---------------------------------------------------------------------------
+# Upstream smarthost (SMTP provider)
+# ---------------------------------------------------------------------------
+relayhost = [{{ smtp_relay_relayhost }}]:{{ smtp_relay_relayhost_port }}
+
+# ---------------------------------------------------------------------------
+# TLS to upstream (mandatory encryption)
+# ---------------------------------------------------------------------------
+smtp_tls_security_level = encrypt
+
+# ---------------------------------------------------------------------------
+# SASL authentication to upstream
+# ---------------------------------------------------------------------------
+smtp_sasl_auth_enable = yes
+smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
+smtp_sasl_security_options = noanonymous
+
+{% if smtp_relay_generic_maps_enable | bool %}
+# ---------------------------------------------------------------------------
+# Sender address rewriting (e.g. root@ -> noreply@)
+# ---------------------------------------------------------------------------
+smtp_generic_maps = hash:/etc/postfix/generic
+{% endif %}

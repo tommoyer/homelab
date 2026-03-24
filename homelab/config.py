@@ -183,11 +183,3 @@ def render_jinja_template(*, template_path: Path, context: dict[str, Any]) -> st
     template = env.get_template(template_path.name)
     return str(template.render(**context))
 
-
-def is_unified_mikrotik_config(config: dict[str, Any]) -> bool:
-    """Return True if config uses the unified mikrotik_* section layout."""
-
-    return any(
-        isinstance(config.get(key), dict)
-        for key in ("mikrotik_defaults", "mikrotik_dhcp_leases", "mikrotik_firewall", "mikrotik_backup")
-    )

@@ -5,14 +5,7 @@ import logging
 import sys
 from dataclasses import dataclass
 
-from . import (
-    caddyfile,
-    deploy,
-    mikrotik_backup,
-    mikrotik_dhcp_leases,
-    mikrotik_firewall,
-    pihole,
-)
+from . import caddyfile, deploy, dnscontrol, dnsmasq, mikrotik_prompt, pihole
 from .logging_utils import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -20,9 +13,9 @@ logger = logging.getLogger(__name__)
 COMMANDS: dict[str, tuple[str, object]] = {
     "run": ("Run multiple features", object()),
     "pihole": ("Generate/apply Pi-hole config", pihole),
-    "mikrotik-backup": ("Back up MikroTik RouterOS /export", mikrotik_backup),
-    "mikrotik-dhcp": ("Generate/apply MikroTik DHCP static leases", mikrotik_dhcp_leases),
-    "mikrotik-firewall": ("Generate/apply MikroTik firewall dstnat/filter rules", mikrotik_firewall),
+    "dnsmasq": ("Generate dnsmasq config from Services + Tailscale status", dnsmasq),
+    "dnscontrol": ("Generate dnscontrol files for Cloudflare public DNS", dnscontrol),
+    "mikrotik": ("Prompt-driven single-service MikroTik command generator", mikrotik_prompt),
     "caddy": ("Generate/deploy Caddyfile from Google Sheets", caddyfile),
     "deploy": ("Deploy a complete node/service", deploy),
 }
@@ -72,7 +65,6 @@ def _parse_global_options(argv: list[str]) -> tuple[bool, list[str]]:
 @dataclass(frozen=True)
 class _RunPlan:
     apply: bool
-    yes: bool
     features: list[str]
 
 
@@ -89,42 +81,40 @@ def _build_run_parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help=(
-            "Forward --apply to apply-capable features (pihole, mikrotik-dhcp, mikrotik-firewall, "
-            "caddy, mikrotik-backup). Without --apply, tools run in dry-run mode and print what "
+            "Forward --apply to apply-capable features (pihole, dnsmasq, caddy, dnscontrol). Without "
+            "--apply, tools run in dry-run mode and print what "
             "would be done."
         ),
     )
-    parser.add_argument(
-        "--yes",
-        action="store_true",
-        help="Forward --yes (currently used by mikrotik-dhcp).",
-    )
-
     # If any of these are set, we treat it as an explicit allow-list.
     parser.add_argument("--pihole", action="store_true", help="Include Pi-hole config generation/apply")
     parser.add_argument(
-        "--mikrotik-dhcp",
+        "--mikrotik",
         action="store_true",
-        help="Include MikroTik DHCP leases generation/apply",
+        help="Include prompt-driven MikroTik single-service command generation",
     )
     parser.add_argument(
-        "--mikrotik-firewall",
+        "--caddy",
         action="store_true",
-        help="Include MikroTik firewall dstnat/filter generation/apply",
+        help="Include Caddyfile generation/deploy",
     )
     parser.add_argument(
-        "--mikrotik-backup",
+        "--dnsmasq",
         action="store_true",
-        help="Include MikroTik /export backup",
+        help="Include dnsmasq address generation/deploy",
     )
-    parser.add_argument("--caddy", action="store_true", help="Include Caddyfile generation/deploy")
+    parser.add_argument(
+        "--dnscontrol",
+        action="store_true",
+        help="Include dnscontrol public DNS generation/apply",
+    )
 
     # Optional explicit disables.
     parser.add_argument("--no-pihole", action="store_true", help="Exclude Pi-hole")
-    parser.add_argument("--no-mikrotik-dhcp", action="store_true", help="Exclude MikroTik DHCP")
-    parser.add_argument("--no-mikrotik-firewall", action="store_true", help="Exclude MikroTik firewall")
-    parser.add_argument("--no-mikrotik-backup", action="store_true", help="Exclude MikroTik backup")
+    parser.add_argument("--no-mikrotik", action="store_true", help="Exclude MikroTik prompt generator")
     parser.add_argument("--no-caddy", action="store_true", help="Exclude Caddy")
+    parser.add_argument("--no-dnsmasq", action="store_true", help="Exclude dnsmasq")
+    parser.add_argument("--no-dnscontrol", action="store_true", help="Exclude dnscontrol")
 
     return parser
 
@@ -135,17 +125,17 @@ def _plan_run(argv: list[str]) -> _RunPlan:
 
     explicit_enables = {
         "pihole": bool(args.pihole),
-        "mikrotik-dhcp": bool(args.mikrotik_dhcp),
-        "mikrotik-firewall": bool(args.mikrotik_firewall),
-        "mikrotik-backup": bool(args.mikrotik_backup),
+        "mikrotik": bool(args.mikrotik),
         "caddy": bool(args.caddy),
+        "dnsmasq": bool(args.dnsmasq),
+        "dnscontrol": bool(args.dnscontrol),
     }
     explicit_disables = {
         "pihole": bool(args.no_pihole),
-        "mikrotik-dhcp": bool(args.no_mikrotik_dhcp),
-        "mikrotik-firewall": bool(args.no_mikrotik_firewall),
-        "mikrotik-backup": bool(args.no_mikrotik_backup),
+        "mikrotik": bool(args.no_mikrotik),
         "caddy": bool(args.no_caddy),
+        "dnsmasq": bool(args.no_dnsmasq),
+        "dnscontrol": bool(args.no_dnscontrol),
     }
 
     for feature, enabled in explicit_enables.items():
@@ -160,20 +150,20 @@ def _plan_run(argv: list[str]) -> _RunPlan:
 
     features = [name for name in features if not explicit_disables.get(name, False)]
 
-    # Default safety-ish ordering: backup first, then changes.
+    # Default ordering.
     ordered = [
         name
         for name in [
-            "mikrotik-backup",
-            "mikrotik-firewall",
-            "mikrotik-dhcp",
+            "mikrotik",
             "pihole",
+            "dnsmasq",
             "caddy",
+            "dnscontrol",
         ]
         if name in features
     ]
 
-    return _RunPlan(apply=bool(args.apply), yes=bool(args.yes), features=ordered)
+    return _RunPlan(apply=bool(args.apply), features=ordered)
 
 
 def _run_mode(argv: list[str], *, debug: bool) -> int:
@@ -186,29 +176,11 @@ def _run_mode(argv: list[str], *, debug: bool) -> int:
 
     for feature in plan.features:
         try:
-            if feature == "mikrotik-backup":
-                f_argv: list[str] = []
-                if plan.apply:
-                    f_argv.append("--apply")
-                code = int(mikrotik_backup.main(f_argv))
-            elif feature == "mikrotik-dhcp":
+            if feature == "mikrotik":
                 f_argv: list[str] = []
                 if debug:
                     f_argv.append("--debug")
-                if plan.apply:
-                    f_argv.append("--apply")
-                if plan.yes:
-                    f_argv.append("--yes")
-                code = int(mikrotik_dhcp_leases.main(f_argv))
-            elif feature == "mikrotik-firewall":
-                f_argv = []
-                if debug:
-                    f_argv.append("--debug")
-                if plan.apply:
-                    f_argv.append("--apply")
-                if plan.yes:
-                    f_argv.append("--yes")
-                code = int(mikrotik_firewall.main(f_argv))
+                code = int(mikrotik_prompt.main(f_argv))
             elif feature == "pihole":
                 f_argv = ["--apply"] if plan.apply else []
                 code = int(pihole.main(f_argv))
@@ -219,6 +191,20 @@ def _run_mode(argv: list[str], *, debug: bool) -> int:
                 if plan.apply:
                     f_argv.append("--apply")
                 code = int(caddyfile.main(f_argv))
+            elif feature == "dnsmasq":
+                f_argv = []
+                if debug:
+                    f_argv.append("--debug")
+                if plan.apply:
+                    f_argv.append("--apply")
+                code = int(dnsmasq.main(f_argv))
+            elif feature == "dnscontrol":
+                f_argv = []
+                if debug:
+                    f_argv.append("--debug")
+                if plan.apply:
+                    f_argv.append("--apply")
+                code = int(dnscontrol.main(f_argv))
             else:
                 print(f"Error: unknown run feature: {feature}", file=sys.stderr)
                 return 2
@@ -250,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # If global --debug was enabled, try to forward it to subcommands that
     # already support their own --debug flag (preserves existing UX).
-    if debug and "--debug" not in cmd_argv and command in {"caddy", "mikrotik-dhcp", "mikrotik-firewall"}:
+    if debug and "--debug" not in cmd_argv and command in {"caddy", "mikrotik"}:
         cmd_argv = ["--debug", *cmd_argv]
 
     if command == "run":

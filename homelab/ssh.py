@@ -86,6 +86,7 @@ def ssh_run(
     target: str,
     command: str,
     check: bool = True,
+    capture_output: bool = True,
     env: dict[str, str] | None,
 ) -> subprocess.CompletedProcess[str]:
     logger.debug("ssh_run: target=%s command=%r check=%s", target, command, check)
@@ -93,7 +94,7 @@ def ssh_run(
         [*ssh_args, target, command],
         check=check,
         text=True,
-        capture_output=True,
+        capture_output=capture_output,
         env=env,
     )
 

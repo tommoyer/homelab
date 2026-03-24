@@ -110,6 +110,27 @@
         - caddy_rebuild_needed | bool
         - ansible_pkg_mgr == 'apk'
 
+    - name: Install dnsmasq
+      ansible.builtin.package:
+        name: dnsmasq
+        state: present
+
+    - name: Disable and mask systemd-resolved
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: stopped
+        enabled: false
+        masked: true
+      failed_when: false
+      when: ansible_service_mgr == 'systemd'
+
+    - name: Enable and start dnsmasq
+      ansible.builtin.systemd:
+        name: dnsmasq
+        enabled: true
+        state: started
+      when: ansible_service_mgr == 'systemd'
+
     - name: Ensure xcaddy install directory exists
       ansible.builtin.file:
         path: "{{ xcaddy_gobin }}"

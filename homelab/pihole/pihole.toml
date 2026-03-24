@@ -129,9 +129,9 @@
   hosts = [
   "192.168.10.1 hexs.mgmt.moyer.wtf",
   "192.168.10.2 crs.mgmt.moyer.wtf",
-  "192.168.10.3 capax.mgmt.moyer.wtf",
+  "192.168.10.3 udr.mgmt.moyer.wtf",
   "192.168.10.4 u6p-0.mgmt.moyer.wtf",
-  "192.168.10.5 kuma.mgmt.moyer.wtf",
+  "192.168.100.2 pihole.hivemind.moyer.wtf",
   "192.168.10.6 desktop-0.mgmt.moyer.wtf",
   "172.16.10.6 desktop-0-ceph.ceph.moyer.wtf",
   "192.168.10.7 meer5-0.mgmt.moyer.wtf",
@@ -142,7 +142,6 @@
   "172.16.10.9 meer8-1-ceph.ceph.moyer.wtf",
   "192.168.10.10 meer8-2.mgmt.moyer.wtf",
   "172.16.10.10 meer8-2-ceph.ceph.moyer.wtf",
-  "192.168.10.11 pihole.mgmt.moyer.wtf",
   "192.168.10.12 authentik.mgmt.moyer.wtf",
   "192.168.10.13 unifi.mgmt.moyer.wtf",
   "192.168.10.14 smtp-relay.mgmt.moyer.wtf",
@@ -244,24 +243,22 @@
   # Allowed values are:
   #     Array of CNAMEs, each one in the following form: "<cname>,<target>[,<TTL>]"
   cnameRecords = [
-  "authentik.moyer.wtf,authentik.mgmt.moyer.wtf",
+  "authentik.moyer.wtf,caddy.dmz.moyer.wtf",
   "caddy.moyer.wtf,caddy.dmz.moyer.wtf",
-  "capax.moyer.wtf,capax.mgmt.moyer.wtf",
-  "crs.moyer.wtf,crs.mgmt.moyer.wtf",
+  "crs.moyer.wtf,caddy.dmz.moyer.wtf",
   "desktop-0.moyer.wtf,desktop-0.mgmt.moyer.wtf",
   "hexs.moyer.wtf,caddy.dmz.moyer.wtf",
-  "kuma.moyer.wtf,kuma.mgmt.moyer.wtf",
   "meer5-0.moyer.wtf,meer5-0.mgmt.moyer.wtf",
   "meer8-0.moyer.wtf,meer8-0.mgmt.moyer.wtf",
   "meer8-1.moyer.wtf,meer8-1.mgmt.moyer.wtf",
   "meer8-2.moyer.wtf,meer8-2.mgmt.moyer.wtf",
   "minecraft.moyer.wtf,minecraft.homelab.moyer.wtf",
-  "pihole.moyer.wtf,pihole.mgmt.moyer.wtf",
+  "pihole.moyer.wtf,caddy.dmz.moyer.wtf",
   "proxmox.moyer.wtf,caddy.dmz.moyer.wtf",
   "ptero-panel.moyer.wtf,caddy.dmz.moyer.wtf",
   "smtp-relay.moyer.wtf,smtp-relay.mgmt.moyer.wtf",
-  "u6p-0.moyer.wtf,u6p-0.mgmt.moyer.wtf",
-  "unifi.moyer.wtf,unifi.mgmt.moyer.wtf",
+  "u6p-0.moyer.wtf,caddy.dmz.moyer.wtf",
+  "udr.moyer.wtf,udr.mgmt.moyer.wtf",
 ]
 
   # Port used by the DNS server

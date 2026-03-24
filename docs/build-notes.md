@@ -1,5 +1,27 @@
 # Notes on how things are configured
 
+## `mikrotik`
+
+Single-service RouterOS rule generation is now handled via the unified command:
+
+```
+python -m homelab mikrotik
+```
+
+- Uses a curses-based form UI to edit one service at a time.
+- Prefills fields from `config.toml` and Google Sheets service/node data when available.
+- Shows a curses confirmation screen before generating commands.
+- Generates RouterOS commands only (no direct apply) and writes an `.rsc` artifact.
+
+Non-interactive mode (sheet as source of truth):
+
+```
+python -m homelab mikrotik --no-prompt --service ptero-panel.moyer.wtf
+```
+
+- `--no-prompt` requires `--service`.
+- In this mode, generation uses Google Sheet values directly (no curses form/confirmation).
+
 ## Proxmox VE
 
 - Installed using [Proxmox VE Official Guide](https://pve.proxmox.com/wiki/Installation)

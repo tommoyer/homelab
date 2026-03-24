@@ -1,0 +1,111 @@
+{# 
+RouterOS Firewall NAT Template
+Jinja2 template for generating NAT rules
+Variables expected:
+  - srcnat_rules: list of source NAT rules (typically masquerade for outbound)
+  - dstnat_rules: list of destination NAT rules (port forwards, WAN to LAN services)
+  - hairpin_nat_rules: list of hairpin NAT rules (internal access to public IPs)
+  - wan_public_ip: WAN public IP address
+#}
+# ===== FIREWALL NAT RESET =====
+# Remove all existing NAT rules to ensure clean state
+/ip firewall nat remove [find];
+
+# ===== SECTION 1: SOURCE NAT (SRCNAT) - OUTBOUND MASQUERADE =====
+# Masquerade internal networks going to internet
+# Applied when packets leave through WAN interface
+
+{% if srcnat_rules %}
+{% for rule in srcnat_rules %}
+/ip firewall nat add chain=srcnat \
+action={{ rule.action | default('masquerade') }} \
+{% if rule.src_address %}src-address={{ rule.src_address }} {% endif %}\
+{% if rule.src_address_list %}src-address-list={{ rule.src_address_list }} {% endif %}\
+{% if rule.out_interface %}out-interface={{ rule.out_interface }} {% endif %}\
+{% if rule.out_interface_list %}out-interface-list={{ rule.out_interface_list }} {% endif %}\
+{% if rule.protocol %}protocol={{ rule.protocol }} {% endif %}\
+{% if rule.dst_port %}dst-port={{ rule.dst_port }} {% endif %}\
+comment="SRCNAT: {{ rule.comment }}";
+{% endfor %}
+{% else %}
+# Default masquerade rule for all LAN to WAN traffic
+/ip firewall nat add chain=srcnat action=masquerade out-interface-list=WAN comment="SRCNAT: Masquerade all LAN to internet";
+{% endif %}
+
+# ===== SECTION 2: DESTINATION NAT (DSTNAT) EXCEPTIONS =====
+# High-priority specific dstnat rules (if any exceptions needed)
+{% if dstnat_exceptions %}
+{% for exception in dstnat_exceptions %}
+/ip firewall nat add chain=dstnat \
+action={{ exception.action }} \
+{% if exception.protocol %}protocol={{ exception.protocol }} {% endif %}\
+{% if exception.dst_address %}dst-address={{ exception.dst_address }} {% endif %}\
+{% if exception.dst_port %}dst-port={{ exception.dst_port }} {% endif %}\
+{% if exception.to_addresses %}to-addresses={{ exception.to_addresses }} {% endif %}\
+{% if exception.to_ports %}to-ports={{ exception.to_ports }} {% endif %}\
+{% if exception.in_interface %}in-interface={{ exception.in_interface }} {% endif %}\
+{% if exception.in_interface_list %}in-interface-list={{ exception.in_interface_list }} {% endif %}\
+comment="DSTNAT-EXCEPTION: {{ exception.comment }}";
+{% endfor %}
+{% endif %}
+
+# ===== SECTION 3: DESTINATION NAT (DSTNAT) - WAN INBOUND =====
+# Port forwarding from WAN to internal services
+# These rules allow external access to internal services
+
+{% if dstnat_rules %}
+{% for rule in dstnat_rules %}
+/ip firewall nat add chain=dstnat \
+action={{ rule.action | default('dst-nat') }} \
+{% if rule.protocol %}protocol={{ rule.protocol }} {% endif %}\
+{% if rule.src_address %}src-address={{ rule.src_address }} {% endif %}\
+{% if rule.src_address_list %}src-address-list={{ rule.src_address_list }} {% endif %}\
+{% if rule.dst_address %}dst-address={{ rule.dst_address }} {% endif %}\
+{% if rule.dst_port %}dst-port={{ rule.dst_port }} {% endif %}\
+{% if rule.to_addresses %}to-addresses={{ rule.to_addresses }} {% endif %}\
+{% if rule.to_ports %}to-ports={{ rule.to_ports }} {% endif %}\
+{% if rule.in_interface %}in-interface={{ rule.in_interface }} {% endif %}\
+{% if rule.in_interface_list %}in-interface-list={{ rule.in_interface_list }} {% endif %}\
+comment="DSTNAT: {{ rule.comment }}";
+{% endfor %}
+{% else %}
+# No WAN inbound dstnat rules defined
+{% endif %}
+
+# ===== SECTION 4: HAIRPIN NAT - INTERNAL ACCESS TO PUBLIC IPs =====
+# Allow internal clients to access services via public domain names
+# Without hairpin NAT, internal clients accessing public IPs would fail
+# because traffic would leave via WAN and not reach internal services
+
+{% if hairpin_nat_rules %}
+{% for rule in hairpin_nat_rules %}
+/ip firewall nat add chain=dstnat \
+action={{ rule.action | default('dst-nat') }} \
+{% if rule.protocol %}protocol={{ rule.protocol }} {% endif %}\
+{% if rule.src_address %}src-address={{ rule.src_address }} {% endif %}\
+{% if rule.src_address_list %}src-address-list={{ rule.src_address_list }} {% endif %}\
+{% if rule.dst_address %}dst-address={{ rule.dst_address }} {% endif %}\
+{% if rule.dst_port %}dst-port={{ rule.dst_port }} {% endif %}\
+{% if rule.to_addresses %}to-addresses={{ rule.to_addresses }} {% endif %}\
+{% if rule.to_ports %}to-ports={{ rule.to_ports }} {% endif %}\
+comment="HAIRPIN: {{ rule.comment }}";
+{% endfor %}
+{% else %}
+# No hairpin NAT rules defined
+{% endif %}
+
+#
+# NAT Chain Usage:
+# - SRCNAT chain: Modifies source address/port for outbound traffic (masquerade, src-nat)
+# - DSTNAT chain: Modifies destination address/port for inbound traffic (port forwarding, dst-nat)
+#
+# Processing order:
+# 1. DSTNAT (prerouting) - happens BEFORE routing decision
+# 2. Routing decision
+# 3. SRCNAT (postrouting) - happens AFTER routing decision
+#
+# Common patterns:
+# - Masquerade: Hide internal IPs behind router WAN IP for internet access
+# - Port forwarding: WAN IP:port -> Internal IP:port for external service access
+# - Hairpin NAT: Internal clients -> WAN IP -> redirected back to internal IP
+#

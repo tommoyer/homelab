@@ -1,6 +1,6 @@
 # Unified default configuration for the homelab Python package.
 #
-# Each tool reads its own section (e.g. [pihole], [mikrotik_dhcp_leases]).
+# Each tool reads its own section (e.g. [pihole], [mikrotik]).
 # CLI flags always override values from this file.
 
 [globals]
@@ -12,21 +12,26 @@ sheet_url = "https://docs.google.com/spreadsheets/d/1f4emn4uIPscEgOHtgmETODlTvz1
 # Sheet gids (used by multiple tools)
 nodes_gid = 344016240
 services_gid = 157827580
+helpers_gid = 230264716
+# subnets_gid = 0  # Set to the actual GID of your Subnets tab to enable intra-VLAN rule suppression
 
 # DNS hostname of the Caddy server (used as a CNAME target by pihole when ingress=caddy)
 caddy_hostname = "caddy.dmz.moyer.wtf"
 
+# Public WAN IPv4 used for internet-facing DNS records.
+public_ip = ""
+
 # Caddy proxy IP in the DMZ VLAN (used by multiple tools)
 caddy_ip = "192.168.20.2"
 
-# Default MikroTik RouterOS connection target used by mikrotik-dhcp + mikrotik-firewall
+# Default MikroTik RouterOS connection target
 mikrotik_host = "192.168.10.1"
 mikrotik_user = "admin"
 
 # Example overrides (optional):
 # mikrotik_password_env = "MIKROTIK_PASSWORD"  # legacy alias for password_env
 
-# MikroTik RouterOS SSH defaults (used by mikrotik-dhcp/mikrotik-firewall/mikrotik-backup)
+# MikroTik RouterOS SSH defaults
 ssh_port = 22
 
 # Optional password env var to use with sshpass (leave empty to use SSH keys/agent)
@@ -39,9 +44,6 @@ ssh_identity_file = ""
 # This file is read by the deploy tool and injected into rendered pve-scripts/*.vars.
 ssh_authorized_key_file = "~/.ssh/id_rsa.pub"
 
-# Local backup destination (can be overridden per-device)
-backup_dir = "./homelab/mikrotik/backups"
-
 [pihole]
 # Example overrides (optional):
 # sheet_url = "https://.../export?format=csv&gid=0"  # defaults to globals.sheet_url
@@ -53,74 +55,63 @@ output = "./homelab/pihole/pihole.toml"
 
 # Pi-hole instance SSH settings (used with --apply)
 pihole_user = "root"
-pihole_host = "192.168.10.11"
+pihole_host = "192.168.100.2"
 
 # Whether to use sudo for remote operations during --apply.
 use_sudo = false
 
+[dnsmasq]
+# dnsmasq trusted-services generator configuration.
+# Uses [globals].sheet_url and [globals].services_gid by default.
+template = "./homelab/dnsmasq/addresses.conf.j2"
+output = "./homelab/dnsmasq/addresses.conf"
 
-[mikrotik_backup.defaults]
-# Inherit from [globals] (and legacy [mikrotik_defaults] if present) unless overridden here.
+# Node key used to resolve Tailscale IP for ingress=caddy and exposure=trusted services.
+# Defaults to [globals].caddy_hostname when omitted.
+# caddy_node = "caddy.dmz.moyer.wtf"
 
-# When true, old backups are deleted before downloading a new one (--cleanup).
-cleanup = true
+# Optional override for tailscale executable path.
+# tailscale_command = "tailscale"
 
-# Number of existing backups to keep per device when cleanup is enabled (--keep).
-keep = 3
+[dnsmasq.dnsmasq_deploy]
+host = "caddy.dmz.moyer.wtf"
+username = "root"
+path = "/etc/dnsmasq.d/addresses.conf"
+restart_command = "sudo systemctl restart dnsmasq"
+port = 22
 
-# Example overrides (optional):
-# ssh_port = 22
-# user = "admin"
-# password_env = "MIKROTIK_PASSWORD"
-# ssh_identity_file = "~/.ssh/id_ed25519"
-# backup_dir = "../mikrotik/backups"
+[dnscontrol]
+# dnscontrol file generator for Cloudflare public records.
+# Uses [globals].sheet_url + [globals].services_gid by default.
 
-[mikrotik_backup.devices.hexs]
-host = "192.168.10.1"
+# Optional explicit public IP override (falls back to [globals].public_ip)
+# public_ip = "203.0.113.10"
 
-[mikrotik_backup.devices.crs]
-host = "192.168.10.2"
+# Optional explicit zone list. If omitted, zones fall back to [caddy].caddy_zones[*].zone.
+# zones = ["moyer.wtf", "thomasmoyer.org"]
 
-[mikrotik_backup.devices.cap_ax]
-host = "192.168.10.3"
+# DNS label created in each zone as an A record to public_ip, then used as CNAME target.
+public_target_label = "_public"
 
+# Cloudflare token source for generated creds.json and --apply (dnscontrol push).
+cloudflare_token_env = "CLOUDFLARE_API_TOKEN"
 
-[mikrotik_dhcp_leases]
-# Example overrides (optional; all default to [globals] if omitted):
-# sheet_url = "https://.../export?format=csv&gid=0"
-# nodes_gid = 344016240
-# mikrotik_host = "192.168.10.1"
-# mikrotik_user = "admin"
-# ssh_port = 22
-# password_env = "MIKROTIK_PASSWORD"
-# ssh_identity_file = "~/.ssh/id_ed25519"
-# backup_dir = "../mikrotik/backups"
+# dnscontrol executable used when --apply is enabled.
+dnscontrol_command = "dnscontrol"
+
+# Output files (relative to this config file if not absolute).
+output_dir = "./homelab/dnscontrol"
+dnsconfig_output = "./homelab/dnscontrol/dnsconfig.js"
+creds_output = "./homelab/dnscontrol/creds.json"
+
+[mikrotik]
+# Prompt-driven MikroTik generation metadata.
 
 # Nodes sheet column names
 lease_type_column = "Static/DHCP"
 ip_column = "IP Address"
 subnet_column = "Subnet"
 mac_column = "MAC Address"
-
-# Output file containing RouterOS CLI commands
-output = "./homelab/mikrotik/mikrotik-dhcp-leases.rsc"
-
-# When running with --apply, the tool also downloads a full RouterOS /export
-# and writes it to this directory.
-
-
-[mikrotik_firewall]
-# Uses the same sheet_url and nodes_gid as [mikrotik_dhcp_leases] by default.
-
-
-# Example overrides (optional; all default to [globals] / [mikrotik_dhcp_leases] if omitted):
-# sheet_url = "https://.../export?format=csv&gid=0"
-# nodes_gid = 344016240
-# mikrotik_host = "192.168.10.1"
-# mikrotik_user = "admin"
-# ssh_port = 22
-# password_env = "MIKROTIK_PASSWORD"
-# ssh_identity_file = "~/.ssh/id_ed25519"
 
 # One or more Caddy proxy IPs in the DMZ VLAN.
 # Defaults to [globals].caddy_ip if omitted. May also be provided at runtime via --caddy-ip.
@@ -130,11 +121,21 @@ output = "./homelab/mikrotik/mikrotik-dhcp-leases.rsc"
 dmz_interface = "vlan20-dmz"
 homelab_interface = "vlan30-homelab"
 
-# If an ingress=caddy row is missing backend_port, assume this port.
-caddy_default_backend_port = 80
+# Default output base path used by prompt mode.
+output = "./homelab/mikrotik"
 
-# Output script path
-output = "./homelab/mikrotik/mikrotik-firewall.rsc"
+# VLAN definitions for ingress=direct and ingress=dstnat+source_vlans rules.
+# Keys must match the values used in the "Source VLANs" column of the Services
+# sheet (case-insensitive). Supported sub-keys:
+#   interface       -> RouterOS in-interface  (preferred)
+#   interface_list  -> RouterOS in-interface-list (alternative)
+#   address_list    -> RouterOS src-address-list (optional extra constraint)
+#   subnet          -> CIDR fallback (sheet subnets_gid takes precedence when set)
+[mikrotik.vlans]
+mgmt    = { interface = "vlan10-mgmt" }
+dmz     = { interface = "vlan20-dmz" }
+homelab = { interface = "vlan30-homelab" }
+hivemind = { interface = "vlan100-clients" }
 
 
 [caddy]

@@ -1,0 +1,92 @@
+---
+- name: Install and configure Pihole and Unbound
+  hosts: pihole
+  become: true
+  vars:
+    pihole_config_src: "../../homelab/pihole/pihole.toml"
+    pihole_config_dest: "/etc/pihole/pihole.toml"
+    pihole_installer_dest: "/tmp/basic-install.sh"
+    unbound_config_src: "../files/unbound-pi-hole.conf"
+    unbound_config_dest: "/etc/unbound/unbound.conf.d/pi-hole.conf"
+
+  tasks:
+    - name: Check if pihole configuration file exists
+      ansible.builtin.stat:
+        path: "{{ pihole_config_src }}"
+      register: pihole_config
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Fail if pihole configuration file is missing
+      ansible.builtin.fail:
+        msg: "Pihole configuration file needs to be generated at {{ pihole_config_src }}"
+      when: not pihole_config.stat.exists
+      become: false
+      run_once: true
+
+    - name: Ensure /etc/pihole directory exists
+      ansible.builtin.file:
+        path: /etc/pihole
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Copy pihole configuration file
+      ansible.builtin.copy:
+        src: "{{ pihole_config_src }}"
+        dest: "{{ pihole_config_dest }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Download Pi-hole installer
+      ansible.builtin.get_url:
+        url: https://install.pi-hole.net
+        dest: "{{ pihole_installer_dest }}"
+        mode: "0700"
+        force: true
+
+    - name: Run Pi-hole unattended installer
+      ansible.builtin.command:
+        cmd: "bash {{ pihole_installer_dest }} --unattended"
+      args:
+        creates: /usr/local/bin/pihole
+      register: pihole_install
+      changed_when: pihole_install.rc == 0
+
+    - name: Install Unbound
+      ansible.builtin.apt:
+        name: unbound
+        state: present
+
+    - name: Copy Unbound configuration file
+      ansible.builtin.copy:
+        src: "{{ unbound_config_src }}"
+        dest: "{{ unbound_config_dest }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart Unbound
+
+    - name: Enable and start Unbound service
+      ansible.builtin.systemd_service:
+        name: unbound
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: Enable and start Pihole service
+      ansible.builtin.systemd_service:
+        name: pihole-FTL
+        state: started
+        enabled: true
+        daemon_reload: true
+
+  handlers:
+    - name: Restart Unbound
+      ansible.builtin.systemd_service:
+        name: unbound
+        state: restarted
+        daemon_reload: true

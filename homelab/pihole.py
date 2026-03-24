@@ -4,6 +4,7 @@ import argparse
 import logging
 import subprocess
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import pandas as pd
@@ -138,6 +139,19 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--trace-hostname",
+        default=get_config_value(tool_cfg, "trace_hostname", None),
+        help="Trace generation decisions for a specific hostname/alias",
+    )
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=bool(get_config_value(tool_cfg, "debug", False)),
+        help="Print generation debug output for all hostnames/aliases",
+    )
+
+    parser.add_argument(
         "--apply",
         action="store_true",
         help=(
@@ -156,6 +170,8 @@ def render_config(
     services_gid: int,
     template_path: Path,
     caddy_hostname: str,
+    trace_hostname: str | None = None,
+    debug: bool = False,
 ) -> str:
     if not template_path.exists():
         raise RuntimeError(f"template not found: {template_path}")
@@ -180,70 +196,233 @@ def render_config(
 
     nodes_df = df_with_normalized_columns(nodes_df)
 
-    a_records: list[str] = []
-    nodes_cname_records_set: set[str] = set()
+    trace_key = as_str(trace_hostname).lower().rstrip(".")
 
-    for _, row in nodes_df.iterrows():
+    def _norm_hostname(value: object) -> str:
+        return as_str(value).lower().rstrip(".")
+
+    def _should_trace(*values: object) -> bool:
+        if debug:
+            return True
+        if not trace_key:
+            return False
+        return any(_norm_hostname(value) == trace_key for value in values)
+
+    def _trace(message: str, *values: object) -> None:
+        if not _should_trace(*values):
+            return
+        scope = trace_key or "all"
+        print(f"[pihole trace:{scope}] {message}", file=sys.stderr)
+
+    def _sheet_row_hint(index: object) -> str:
+        try:
+            return str(int(str(index)) + 2)
+        except Exception:
+            return str(index)
+
+    def _format_service_entries(entries: list[tuple[str, str, bool, str]]) -> str:
+        return "; ".join(
+            (
+                f"{target} (ingress={ingress or 'unset'}, row={row_hint}, "
+                f"default_cname_target={'true' if is_default else 'false'})"
+            )
+            for target, ingress, is_default, row_hint in entries
+        )
+
+    a_records: list[str] = []
+    nodes_cname_by_alias: dict[str, list[tuple[str, str]]] = defaultdict(list)
+
+    for node_idx, row in nodes_df.iterrows():
         dns_name = as_str(row.get("dns_name")).lower().rstrip(".")
         hostname = as_str(row.get("hostname")).lower().rstrip(".")
         ip = as_str(row.get("ip_address"))
+        row_hint = _sheet_row_hint(node_idx)
 
         # Preserve legacy behavior: prefer explicit DNS name (often FQDN), otherwise use hostname.
         host_for_a = dns_name or hostname
         if ip and host_for_a:
             a_records.append(f"{ip} {host_for_a}")
+            _trace(f"Nodes row {row_hint}: add A record {ip} {host_for_a}", hostname, dns_name, host_for_a)
 
         # Optional Nodes-derived CNAMEs.
         # Column name in sheet: "Disable CNAME" -> normalized: disable_cname
         disable_cname = parse_bool(row.get("disable_cname"), default=False)
         if disable_cname:
+            _trace(f"Nodes row {row_hint}: skip CNAME because disable_cname=true", hostname, dns_name)
             continue
 
         search_domain = as_str(
             row.get("search_domain", row.get("searchdomain", row.get("domain", "")))
         ).lower().strip().rstrip(".")
         if not hostname or not search_domain:
+            _trace(
+                f"Nodes row {row_hint}: skip CNAME because hostname/search_domain missing",
+                hostname,
+                dns_name,
+            )
             continue
 
         cname = f"{hostname}.{search_domain}".rstrip(".")
         target = (dns_name or hostname).rstrip(".")
         if not cname or not target or cname == target:
+            _trace(
+                (
+                    f"Nodes row {row_hint}: skip CNAME because cname/target invalid or self-target "
+                    f"(cname={cname!r}, target={target!r})"
+                ),
+                hostname,
+                dns_name,
+                cname,
+                target,
+            )
             continue
-        nodes_cname_records_set.add(f"{cname},{target}")
+        nodes_cname_by_alias[cname].append((target, f"nodes row={row_hint}"))
+        _trace(f"Nodes row {row_hint}: candidate CNAME {cname} -> {target}", hostname, dns_name, cname, target)
 
     logger.debug("pihole: a_records=%d", len(a_records))
 
     services_df = df_with_normalized_columns(services_df)
 
-    cname_records_set: set[str] = set(nodes_cname_records_set)
-    for _, row in services_df.iterrows():
-        enabled = parse_bool(row.get("frontend_enabled"), default=False)
-        if not enabled:
-            continue
-
+    service_cname_candidates: dict[str, list[tuple[str, str, bool, str]]] = defaultdict(list)
+    for service_idx, row in services_df.iterrows():
         ingress = as_str(row.get("ingress")).lower()
         frontend_hostname = as_str(row.get("frontend_hostname")).lower().rstrip(".")
         if not frontend_hostname:
             continue
 
-        if ingress == "dstnat":
-            target = as_str(row.get("hostname")).lower().rstrip(".")
-            if not target:
-                continue
-            cname_records_set.add(f"{frontend_hostname},{target}")
-        elif ingress == "caddy":
+        default_cname_target = parse_bool(row.get("default_cname_target"), default=False)
+        row_hint = _sheet_row_hint(service_idx)
+
+        if ingress == "caddy":
             target = (caddy_hostname or "").strip().lower().rstrip(".")
             if not target:
                 raise RuntimeError(
                     "caddy hostname is required to generate ingress=caddy CNAME records; "
                     "set globals.caddy_hostname"
                 )
-            cname_records_set.add(f"{frontend_hostname},{target}")
         else:
-            # Ignore other ingress types.
+            # For dstnat, blank, or any other ingress type, use the hostname column as the target.
+            target = as_str(row.get("hostname")).lower().rstrip(".")
+            if not target:
+                logger.debug(
+                    "pihole: skipping service row with frontend_hostname=%r — no target hostname (ingress=%r)",
+                    frontend_hostname,
+                    ingress,
+                )
+                _trace(
+                    (
+                        f"Services row {row_hint}: skip because target hostname missing "
+                        f"(frontend={frontend_hostname!r}, ingress={ingress!r})"
+                    ),
+                    frontend_hostname,
+                )
+                continue
+
+        service_cname_candidates[frontend_hostname].append((target, ingress, default_cname_target, row_hint))
+        _trace(
+            (
+                f"Services row {row_hint}: candidate CNAME {frontend_hostname} -> {target} "
+                f"(ingress={ingress or 'unset'}, default_cname_target={default_cname_target})"
+            ),
+            frontend_hostname,
+            target,
+        )
+
+    resolved_alias_targets: dict[str, str] = {}
+    conflicts: list[str] = []
+
+    all_aliases = sorted(
+        set(nodes_cname_by_alias.keys()) | set(service_cname_candidates.keys()),
+        key=str.lower,
+    )
+
+    for alias in all_aliases:
+        node_entries = nodes_cname_by_alias.get(alias, [])
+        service_entries = service_cname_candidates.get(alias, [])
+
+        if len(node_entries) > 1:
+            node_details = "; ".join(f"{target} ({source})" for target, source in node_entries)
+            conflicts.append(
+                f"- {alias} appears {len(node_entries)}x in Nodes, which is invalid ({node_details})"
+            )
+            _trace("Resolution: conflict (duplicate Nodes entries)", alias)
             continue
 
-    cname_records = sorted(cname_records_set, key=str.lower)
+        if node_entries and service_entries:
+            node_details = "; ".join(f"{target} ({source})" for target, source in node_entries)
+            service_details = _format_service_entries(service_entries)
+            conflicts.append(
+                f"- {alias} appears in both Nodes and Services; this is invalid "
+                f"(Nodes: {node_details}; Services: {service_details})"
+            )
+            _trace("Resolution: conflict (alias exists in both Nodes and Services)", alias)
+            continue
+
+        if node_entries:
+            resolved_alias_targets[alias] = node_entries[0][0]
+            _trace(f"Resolution: selected Nodes target {node_entries[0][0]}", alias)
+            continue
+
+        if not service_entries:
+            continue
+
+        distinct_targets: list[str] = []
+        for target, _, _, _ in service_entries:
+            if target not in distinct_targets:
+                distinct_targets.append(target)
+
+        if len(distinct_targets) == 1:
+            resolved_alias_targets[alias] = distinct_targets[0]
+            _trace(f"Resolution: collapsed duplicate Services rows to target {distinct_targets[0]}", alias)
+            continue
+
+        default_entries = [entry for entry in service_entries if entry[2]]
+        if len(default_entries) == 1:
+            resolved_alias_targets[alias] = default_entries[0][0]
+            _trace(
+                f"Resolution: selected default Services target {default_entries[0][0]} (default_cname_target=true)",
+                alias,
+            )
+            continue
+
+        if not sys.stdin.isatty():
+            if len(default_entries) == 0:
+                reason = "no rows have default_cname_target=true"
+            else:
+                reason = f"{len(default_entries)} rows have default_cname_target=true"
+            conflicts.append(
+                f"- {alias} has multiple Services targets and cannot be resolved non-interactively: "
+                f"{reason}. Candidates: {_format_service_entries(service_entries)}"
+            )
+            _trace(f"Resolution: conflict in non-interactive mode ({reason})", alias)
+            continue
+
+        print(f"\nConflict: frontend hostname {alias!r} maps to multiple service targets:")
+        for idx, target in enumerate(distinct_targets, 1):
+            target_entries = [entry for entry in service_entries if entry[0] == target]
+            print(f"  [{idx}] {target} <- {_format_service_entries(target_entries)}")
+
+        while True:
+            raw = input(f"Choose target for {alias!r} [1-{len(distinct_targets)}]: ").strip()
+            if raw.isdigit() and 1 <= int(raw) <= len(distinct_targets):
+                resolved_alias_targets[alias] = distinct_targets[int(raw) - 1]
+                _trace(f"Resolution: selected interactively -> {resolved_alias_targets[alias]}", alias)
+                break
+            print(f"  Please enter a number between 1 and {len(distinct_targets)}.")
+
+    if conflicts:
+        raise RuntimeError(
+            "Invalid CNAME alias conflicts detected. "
+            "Update the network source data to remove/fix these entries:\n"
+            + "\n".join(conflicts)
+        )
+
+    cname_records = sorted(
+        (f"{alias},{target}" for alias, target in resolved_alias_targets.items()),
+        key=str.lower,
+    )
+    if trace_key and trace_key not in resolved_alias_targets:
+        _trace("Resolution: hostname not present in final cnameRecords", trace_key)
     logger.debug("pihole: cname_records=%d", len(cname_records))
 
     dns_hosts_toml = _toml_string_array(a_records)
@@ -333,6 +512,8 @@ def main(argv: list[str] | None = None) -> int:
             services_gid=int(getattr(args, "services_gid")),
             template_path=template_path,
             caddy_hostname=caddy_hostname,
+            trace_hostname=(str(args.trace_hostname) if args.trace_hostname else None),
+            debug=bool(args.debug),
         )
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)

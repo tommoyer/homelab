@@ -1,0 +1,207 @@
+---
+# Provision a Debian-based LXC container as an outbound SMTP relay using Postfix.
+#
+# The relay forwards all outbound mail to an upstream SMTP provider (smarthost)
+# via SASL-authenticated TLS, and restricts inbound relaying to trusted internal
+# networks.
+#
+# Required vault variables (set in host_vars or group_vars):
+#   smtp_sasl_login    - SMTP login/username for the upstream provider
+#   smtp_sasl_password - SMTP password/token for the upstream provider
+#
+# Key variables (override as needed):
+#   smtp_relay_myhostname             Postfix myhostname           (default: smtp-relay.lan)
+#   smtp_relay_myorigin               Envelope From domain         (default: moyer.wtf)
+#   smtp_relay_mydomain               mydomain for DSN handling    (default: moyer.wtf)
+#   smtp_relay_relayhost              Upstream smarthost address   (default: smtp-relay.brevo.com)
+#   smtp_relay_relayhost_port         Upstream smarthost port      (default: 587)
+#   smtp_relay_mynetworks             Trusted relay networks list  (default: 127.0.0.0/8, 192.168.10.0/24)
+#   smtp_relay_generic_maps_enable    Rewrite root@… senders       (default: true)
+#   smtp_relay_generic_maps           List of {from, to} rewrites
+#
+# Usage:
+#   ansible-playbook playbooks/smtp-relay.yaml --limit smtp_relay
+#   ansible-playbook playbooks/smtp-relay.yaml -e target_hosts=smtp-relay.lan
+
+- name: Provision Postfix SMTP relay
+  hosts: "{{ target_hosts | default('smtp_relay') }}"
+  gather_facts: yes
+  become: yes
+
+  vars:
+    smtp_relay_myhostname: smtp-relay.lan
+    smtp_relay_myorigin: moyer.wtf
+    smtp_relay_mydomain: moyer.wtf
+    smtp_relay_relayhost: smtp-relay.brevo.com
+    smtp_relay_relayhost_port: 587
+    smtp_relay_mynetworks:
+      - 127.0.0.0/8
+      - 192.168.10.0/24
+    smtp_relay_generic_maps_enable: true
+    smtp_relay_generic_maps:
+      - from: "root@{{ smtp_relay_mydomain }}"
+        to: "noreply@{{ smtp_relay_mydomain }}"
+      - from: "root@{{ smtp_relay_myhostname }}"
+        to: "noreply@{{ smtp_relay_mydomain }}"
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # System baseline
+    # -------------------------------------------------------------------------
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install Postfix and supporting packages
+      ansible.builtin.apt:
+        name:
+          - postfix
+          - libsasl2-modules
+          - ca-certificates
+          - mailutils
+          - swaks          # for manual end-to-end testing
+        state: present
+
+    # -------------------------------------------------------------------------
+    # Postfix configuration
+    # -------------------------------------------------------------------------
+    - name: Deploy /etc/postfix/main.cf
+      ansible.builtin.template:
+        src: postfix-main.cf.j2
+        dest: /etc/postfix/main.cf
+        owner: root
+        group: root
+        mode: "0644"
+        backup: yes
+      notify: restart postfix
+
+    # -------------------------------------------------------------------------
+    # SASL credentials (upstream provider auth)
+    # -------------------------------------------------------------------------
+    - name: Deploy /etc/postfix/sasl_passwd
+      ansible.builtin.template:
+        src: postfix-sasl_passwd.j2
+        dest: /etc/postfix/sasl_passwd
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      register: _sasl_passwd_result
+
+    - name: Build sasl_passwd.db from sasl_passwd
+      ansible.builtin.command: postmap /etc/postfix/sasl_passwd
+      when: _sasl_passwd_result.changed
+      no_log: true
+      notify: restart postfix
+
+    - name: Ensure sasl_passwd.db exists (first run)
+      ansible.builtin.stat:
+        path: /etc/postfix/sasl_passwd.db
+      register: _sasl_passwd_db
+
+    - name: Build sasl_passwd.db if missing
+      ansible.builtin.command: postmap /etc/postfix/sasl_passwd
+      when: not _sasl_passwd_db.stat.exists
+      no_log: true
+      notify: restart postfix
+
+    # -------------------------------------------------------------------------
+    # Sender address rewriting (root -> noreply)
+    # -------------------------------------------------------------------------
+    - name: Deploy /etc/postfix/generic
+      ansible.builtin.template:
+        src: postfix-generic.j2
+        dest: /etc/postfix/generic
+        owner: root
+        group: root
+        mode: "0644"
+      when: smtp_relay_generic_maps_enable | bool
+      register: _generic_result
+
+    - name: Build generic.db from generic map
+      ansible.builtin.command: postmap /etc/postfix/generic
+      when:
+        - smtp_relay_generic_maps_enable | bool
+        - _generic_result.changed
+      notify: restart postfix
+
+    - name: Ensure generic.db exists (first run)
+      ansible.builtin.stat:
+        path: /etc/postfix/generic.db
+      register: _generic_db
+      when: smtp_relay_generic_maps_enable | bool
+
+    - name: Build generic.db if missing
+      ansible.builtin.command: postmap /etc/postfix/generic
+      when:
+        - smtp_relay_generic_maps_enable | bool
+        - not _generic_db.stat.exists
+      notify: restart postfix
+
+    # -------------------------------------------------------------------------
+    # Remove deprecated smtp_use_tls if set (cleanup for existing installs)
+    # -------------------------------------------------------------------------
+    - name: Check for deprecated smtp_use_tls in main.cf
+      ansible.builtin.command: grep -q smtp_use_tls /etc/postfix/main.cf
+      register: _has_deprecated_param
+      changed_when: false
+      failed_when: false
+
+    - name: Remove deprecated smtp_use_tls parameter
+      ansible.builtin.command: postconf -X smtp_use_tls
+      when: _has_deprecated_param.rc == 0
+      notify: reload postfix
+
+    # -------------------------------------------------------------------------
+    # Enable and start Postfix
+    # -------------------------------------------------------------------------
+    - name: Flush handlers before checking Postfix state
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start Postfix
+      ansible.builtin.systemd:
+        name: postfix
+        enabled: yes
+        state: started
+
+    # -------------------------------------------------------------------------
+    # Smoke test: verify Postfix is listening on port 25
+    # -------------------------------------------------------------------------
+    - name: Wait for Postfix to listen on port 25
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 25
+        timeout: 30
+
+    - name: Verify upstream TLS connectivity
+      ansible.builtin.command: >
+        openssl s_client -starttls smtp
+        -connect {{ smtp_relay_relayhost }}:{{ smtp_relay_relayhost_port }}
+        -verify_return_error -brief
+      register: _tls_check
+      changed_when: false
+      failed_when: _tls_check.rc != 0
+      ignore_errors: true   # non-fatal; log result for operator review
+
+    - name: Report upstream TLS connectivity
+      ansible.builtin.debug:
+        msg: >-
+          Upstream TLS to {{ smtp_relay_relayhost }}:{{ smtp_relay_relayhost_port }}:
+          {{ 'OK' if _tls_check.rc == 0 else 'FAILED – check credentials and firewall' }}
+
+  # ---------------------------------------------------------------------------
+  # Handlers
+  # ---------------------------------------------------------------------------
+  handlers:
+    - name: restart postfix
+      ansible.builtin.systemd:
+        name: postfix
+        state: restarted
+
+    - name: reload postfix
+      ansible.builtin.systemd:
+        name: postfix
+        state: reloaded
+
+
