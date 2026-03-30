@@ -5,20 +5,17 @@ import logging
 import sys
 from dataclasses import dataclass
 
-from . import caddyfile, deploy, dnscontrol, mikrotik_prompt, pihole, subnet_assign
+from .commands import COMMANDS
 from .logging_utils import configure_logging
 
 logger = logging.getLogger(__name__)
 
-COMMANDS: dict[str, tuple[str, object]] = {
-    "run": ("Run multiple features", object()),
-    "pihole": ("Generate/apply Pi-hole config", pihole),
-    "dnscontrol": ("Generate dnscontrol files for Cloudflare public DNS", dnscontrol),
-    "mikrotik": ("Prompt-driven single-service MikroTik command generator", mikrotik_prompt),
-    "caddy": ("Generate/deploy Caddyfile from Google Sheets", caddyfile),
-    "deploy": ("Deploy a complete node/service", deploy),
-    "subnet_assign": ("Interactive subnet/IP assignment tool", subnet_assign),
-}
+
+@dataclass(frozen=True)
+class _RunPlan:
+    apply: bool
+    tailnet: str | None
+    features: list[str]
 
 
 def _print_help() -> None:
@@ -60,13 +57,6 @@ def _parse_global_options(argv: list[str]) -> tuple[bool, list[str]]:
         raise SystemExit(2)
 
     return debug, rest
-
-
-@dataclass(frozen=True)
-class _RunPlan:
-    apply: bool
-    tailnet: str | None
-    features: list[str]
 
 
 def _build_run_parser() -> argparse.ArgumentParser:
@@ -176,30 +166,35 @@ def _run_mode(argv: list[str], *, debug: bool) -> int:
 
     for feature in plan.features:
         try:
+            module = COMMANDS.get(feature, ("", None))[1]
+            if module is None or not hasattr(module, "main"):
+                print(f"Error: unknown run feature: {feature}", file=sys.stderr)
+                return 2
+
             if feature == "mikrotik":
                 f_argv: list[str] = []
                 if debug:
                     f_argv.append("--debug")
-                code = int(mikrotik_prompt.main(f_argv))
+                code = int(module.main(f_argv))  # type: ignore[attr-defined]
             elif feature == "pihole":
                 f_argv = ["--apply"] if plan.apply else []
                 if plan.tailnet:
                     f_argv.extend(["--tailnet", plan.tailnet])
-                code = int(pihole.main(f_argv))
+                code = int(module.main(f_argv))  # type: ignore[attr-defined]
             elif feature == "caddy":
                 f_argv = []
                 if debug:
                     f_argv.append("--debug")
                 if plan.apply:
                     f_argv.append("--apply")
-                code = int(caddyfile.main(f_argv))
+                code = int(module.main(f_argv))  # type: ignore[attr-defined]
             elif feature == "dnscontrol":
                 f_argv = []
                 if debug:
                     f_argv.append("--debug")
                 if plan.apply:
                     f_argv.append("--apply")
-                code = int(dnscontrol.main(f_argv))
+                code = int(module.main(f_argv))  # type: ignore[attr-defined]
             else:
                 print(f"Error: unknown run feature: {feature}", file=sys.stderr)
                 return 2
