@@ -15,10 +15,10 @@ secrets.json
 *.key
 
 # Generated Data
+generated/
 network-configs/dns/external_records.json
 *.log
 node_modules/
-**/downloads
 network-configs/downloads/
 
 # OS Files

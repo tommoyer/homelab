@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from homelab.config import get_effective_table, load_toml_or_exit  # noqa: E402
+from homelab.resolver import build_resolver  # noqa: E402
 
 
 def normalize_column_name(name: str) -> str:
@@ -91,10 +92,13 @@ def normalize_group_name(value: str) -> str:
 
 def load_effective_inventory_config(config_path: Path) -> dict[str, Any]:
     config = load_toml_or_exit(config_path)
-    return get_effective_table(config, "inventory")
+    effective = get_effective_table(config, "inventory")
+    # Stash full config so build_inventory can access [tailscale] etc.
+    effective["_full_config"] = config
+    return effective
 
 
-def build_inventory(cfg: dict[str, Any]) -> dict[str, Any]:
+def build_inventory(cfg: dict[str, Any], *, use_tailscale: bool = True) -> dict[str, Any]:
     sheet_url = cfg.get("sheet_url")
     nodes_gid = cfg.get("nodes_gid")
     if not sheet_url:
@@ -106,6 +110,12 @@ def build_inventory(cfg: dict[str, Any]) -> dict[str, Any]:
 
     df = pd.read_csv(nodes_url)
     df = df_with_normalized_columns(df)
+
+    # Build the Tailscale-aware resolver.  When a host is on the Tailnet its
+    # ansible_host will be set to the Tailscale FQDN; otherwise it falls back
+    # to the IP from the spreadsheet.
+    full_config = cfg.get("_full_config", {})
+    resolver = build_resolver(full_config, df, use_tailscale=use_tailscale)
 
     managed_col = normalize_column_name(str(cfg.get("managed_col", "Managed")))
     roles_col = normalize_column_name(str(cfg.get("roles_col", "Roles")))
@@ -151,7 +161,7 @@ def build_inventory(cfg: dict[str, Any]) -> dict[str, Any]:
             )
 
         hosts.append(hostname)
-        hostvars[hostname] = {"ansible_host": ip_address}
+        hostvars[hostname] = {"ansible_host": resolver.resolve(hostname) or ip_address}
 
         host_groups: set[str] = set()
         if roles_col in set(df.columns):
@@ -255,6 +265,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Output JSON vars for one host",
     )
 
+    parser.add_argument(
+        "--no-tailscale",
+        action="store_true",
+        help="Disable Tailscale-first resolution; always use Sheet IPs",
+    )
+
     return parser.parse_args(argv)
 
 
@@ -263,7 +279,7 @@ def main(argv: list[str]) -> int:
 
     try:
         cfg = load_effective_inventory_config(Path(args.config))
-        inventory = build_inventory(cfg)
+        inventory = build_inventory(cfg, use_tailscale=not args.no_tailscale)
 
         if args.host:
             hostvars = inventory.get("_meta", {}).get("hostvars", {})

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import logging
+import os
 import re
 import shlex
 import subprocess
@@ -19,6 +20,7 @@ from .config import (
     render_jinja_template,
     resolve_path_relative_to_config,
 )
+from .resolver import HostResolver, build_resolver
 from .sheets import (
     as_str,
     build_sheet_url,
@@ -28,6 +30,38 @@ from .sheets import (
 from .ssh import prefix_sshpass, require_command, sshpass_env_from_password_env
 
 logger = logging.getLogger(__name__)
+
+
+def run_ansible_playbooks(hostname: str, config_path: Path) -> bool:
+    """
+    Run bootstrap.yaml and hardening.yaml for the given hostname using the dynamic inventory.
+    Returns True if both playbooks succeed, False otherwise.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    ansible_dir = repo_root / "ansible"
+    inventory_script = ansible_dir / "inventory" / "inventory-spreadsheet.py"
+    playbooks = ["bootstrap.yaml", "hardening.yaml"]
+    env = os.environ.copy()
+    env["ANSIBLE_CONFIG"] = str(ansible_dir / "ansible.cfg")
+    success = True
+    for playbook in playbooks:
+        playbook_path = ansible_dir / "playbooks" / playbook
+        if not playbook_path.exists():
+            logger.error(f"Playbook not found: {playbook_path}")
+            return False
+        cmd = [
+            "ansible-playbook",
+            "-i", str(inventory_script),
+            "--limit", hostname,
+            str(playbook_path),
+        ]
+        logger.info(f"Running: {' '.join(shlex.quote(str(c)) for c in cmd)}")
+        try:
+            result = subprocess.run(cmd, env=env, check=True)
+        except subprocess.CalledProcessError as exc:
+            logger.error(f"Ansible playbook failed: {playbook} for {hostname}: {exc}")
+            success = False
+    return success
 
 
 def _normalize_int_like_string(value: object) -> str:
@@ -362,13 +396,24 @@ def _build_ssh_scp_env_and_user(
 
 
 def _resolve_node_shortname_to_ip(host: str, nodes_lookup: dict[str, str] | None) -> str:
-    """Resolve a short hostname to an IP using the Nodes sheet lookup.
+    """Resolve a short hostname using the Nodes sheet lookup.
 
     If the host already looks like an IP or FQDN, it is returned unchanged.
-    """
 
+    .. note:: When a :class:`~homelab.resolver.HostResolver` is available
+       (stashed under the ``_resolver`` key of *nodes_lookup*), it is used
+       instead so that Tailscale-first resolution is transparent.
+    """
     raw = str(host or "").strip()
-    if not raw or nodes_lookup is None:
+    if not raw:
+        return raw
+
+    # If a HostResolver was stashed by the caller, delegate to it.
+    if isinstance(nodes_lookup, dict) and "_resolver" in nodes_lookup:
+        resolver: HostResolver = nodes_lookup["_resolver"]  # type: ignore[assignment]
+        return resolver.resolve(raw)
+
+    if nodes_lookup is None:
         return raw
 
     # If it's already an IP address, keep it.
@@ -413,9 +458,10 @@ def _sync_pve_helper_defaults(
         return False
 
     repo_root = Path(__file__).resolve().parents[1]
-    pve_scripts_dir = repo_root / "pve-scripts"
-    local_defaults_vars = pve_scripts_dir / "defaults.vars"
-    local_service_template = pve_scripts_dir / f"{script_id}.vars.j2"
+    templates_dir = repo_root / "templates" / "pve-scripts"
+    default_generated_dir = repo_root / "generated" / "pve-scripts"
+    local_defaults_vars = templates_dir / "defaults.vars"
+    local_service_template = templates_dir / f"{script_id}.vars.j2"
 
     if not local_defaults_vars.exists():
         logger.error("Missing local defaults vars file: %s", local_defaults_vars)
@@ -499,8 +545,15 @@ def _sync_pve_helper_defaults(
     # mode uploads the exact same content that was rendered.
     out_dir = render_dir
     if out_dir is None:
-        node_name = as_str(node_cfg.get("hostname")) or "unknown"
-        out_dir = pve_scripts_dir / "rendered" / node_name
+        # Check for config-specified render_dir before falling back to default.
+        config_render_dir = settings.get("render_dir")
+        if config_render_dir:
+            out_dir = resolve_path_relative_to_config(config_path, str(config_render_dir))
+            node_name = as_str(node_cfg.get("hostname")) or "unknown"
+            out_dir = out_dir / node_name
+        else:
+            node_name = as_str(node_cfg.get("hostname")) or "unknown"
+            out_dir = default_generated_dir / node_name
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
         local_rendered_path = out_dir / f"{script_id}.vars"
@@ -574,6 +627,16 @@ def run_proxmox_helper_script(
     if isinstance(overrides, dict) and overrides:
         effective_settings.update(overrides)
 
+    # Build the full URL using pve_scripts_base_url from config if script_url is not absolute
+    from urllib.parse import urljoin, urlparse
+    base_url = effective_settings.get("pve_scripts_base_url")
+    parsed = urlparse(str(script_url))
+    if base_url and not parsed.scheme:
+        # If script_url is a relative path, join with base_url
+        full_script_url = urljoin(base_url, script_url)
+    else:
+        full_script_url = script_url
+
     apply = bool(effective_settings.get("apply", False))
     render_dir: Path | None = effective_settings.get("render_dir")
 
@@ -599,7 +662,7 @@ def run_proxmox_helper_script(
         return False
 
     logger.info("Executing Proxmox Helper script from URL on node %s", ssh_host)
-    quoted_url = shlex.quote(str(script_url))
+    quoted_url = shlex.quote(str(full_script_url))
     cmd = f"bash -c \"$(wget -qLO - {quoted_url})\""
 
     logger.info("Command: %s", cmd)
@@ -676,6 +739,12 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
         return 1
 
     nodes_lookup = load_nodes_lookup(nodes_df)
+
+    # Build Tailscale-aware resolver and stash it inside nodes_lookup so that
+    # _resolve_node_shortname_to_ip (which is threaded deeply through the
+    # call chain) can use it transparently.
+    resolver = build_resolver(config_dict, nodes_df)
+    nodes_lookup["_resolver"] = resolver  # type: ignore[assignment]
         
     try:
         node_cfg = get_node_config(nodes_df, args.hostname)
@@ -689,17 +758,52 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
     if isinstance(node_cfg.get("node"), dict):
         node_cfg["node"]["bridge"] = bridge
 
-    logger.info("Parsed config for %s: Script=%s", args.hostname, node_cfg["script_url"])
+    # Extract deployment type and managed flag
+    row = nodes_df[df_with_normalized_columns(nodes_df)["hostname"].astype(str).str.strip().str.lower() == args.hostname.strip().lower()].iloc[0]
+    logger.debug("Node config row for hostname '%s': %s", args.hostname, row.to_dict())
+    deployment_type = as_str(row.get("deployment_type")).lower()
+    managed = as_str(row.get("managed")).lower() in {"true", "yes", "1"}
 
-    if not node_cfg.get("script_url"):
-        logger.error("Missing Script URL for %s in Nodes sheet.", args.hostname)
-        return 1
+    logger.debug("Deployment type: %s, Managed: %s", deployment_type, managed)
 
-    logger.info("Script URL detected - Running Proxmox Helper Script.")
-    success = run_proxmox_helper_script(
-        node_cfg=node_cfg,
-        settings=settings,
-        config_path=config_path,
-        nodes_lookup=nodes_lookup,
-    )
-    return 0 if success else 1
+    # Scenario 1: Proxmox helper script only
+    if deployment_type == "helper-script" and not managed:
+        if not node_cfg.get("script_url"):
+            logger.error("Missing Script URL for %s in Nodes sheet.", args.hostname)
+            return 1
+        logger.info("Script URL detected - Running Proxmox Helper Script.")
+        success = run_proxmox_helper_script(
+            node_cfg=node_cfg,
+            settings=settings,
+            config_path=config_path,
+            nodes_lookup=nodes_lookup,
+        )
+        return 0 if success else 1
+
+    # Scenario 2: Proxmox helper script + ansible playbook
+    if deployment_type == "helper-script" and managed:
+        if not node_cfg.get("script_url"):
+            logger.error("Missing Script URL for %s in Nodes sheet.", args.hostname)
+            return 1
+        logger.info("Script URL detected - Running Proxmox Helper Script.")
+        success = run_proxmox_helper_script(
+            node_cfg=node_cfg,
+            settings=settings,
+            config_path=config_path,
+            nodes_lookup=nodes_lookup,
+        )
+        if not success:
+            return 1
+        logger.info("Running Ansible playbooks for managed node: %s", args.hostname)
+        ansible_success = run_ansible_playbooks(args.hostname, config_path)
+        return 0 if ansible_success else 1
+
+    # Scenario 3: Ansible playbook only
+    if deployment_type == "ansible" and managed:
+        logger.info("Running Ansible playbooks for managed node: %s", args.hostname)
+        ansible_success = run_ansible_playbooks(args.hostname, config_path)
+        return 0 if ansible_success else 1
+
+    # Unhandled scenario
+    logger.warning(f"Unhandled deployment scenario for node '{args.hostname}': deployment_type='{deployment_type}', managed='{managed}'. Skipping.")
+    return 0

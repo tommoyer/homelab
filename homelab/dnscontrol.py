@@ -71,7 +71,41 @@ def _load_zone_list(*, dnscontrol_cfg: dict[str, Any], caddy_cfg: dict[str, Any]
     return deduped
 
 
-def _collect_public_cname_records(
+def _load_external_zones_from_sheet(
+    *,
+    sheet_url: str,
+    zones_gid: int,
+    debug: bool = False,
+) -> list[str]:
+    """Fetch the Zones tab and return zones where DNS Views includes 'external'."""
+    url = build_sheet_url(sheet_url, zones_gid)
+    zones_df = pd.read_csv(url)
+    zones_df = df_with_normalized_columns(zones_df)
+
+    external_zones: list[str] = []
+    for idx, row in zones_df.iterrows():
+        dns_zone = _normalize_name(row.get("dns_zone"))
+        dns_views = as_str(row.get("dns_views")).lower()
+        if not dns_zone:
+            continue
+        views = [v.strip() for v in dns_views.split(",")]
+        if "external" in views:
+            external_zones.append(dns_zone)
+            if debug:
+                print(
+                    f"[dnscontrol debug] row {idx}: zone {dns_zone!r} has external DNS view",
+                    file=sys.stderr,
+                )
+        elif debug:
+            print(
+                f"[dnscontrol debug] row {idx}: zone {dns_zone!r} skipped (views={views!r})",
+                file=sys.stderr,
+            )
+
+    return sorted(set(external_zones), key=str.lower)
+
+
+def _collect_public_records(
     *,
     services_df: pd.DataFrame,
     zones: list[str],
@@ -137,7 +171,6 @@ def _render_dnsconfig(
     *,
     zones: list[str],
     public_ip: str,
-    public_target_label: str,
     records: list[dict[str, str]],
 ) -> str:
     grouped: dict[str, list[dict[str, str]]] = {zone: [] for zone in zones}
@@ -155,16 +188,30 @@ def _render_dnsconfig(
 
     for zone in zones:
         zone_records = sorted(grouped.get(zone, []), key=lambda item: item["fqdn"])
-        public_target_fqdn = f"{public_target_label}.{zone}."
+        zone_fqdn = f"{zone}."
+
+        # Determine if any apex service needs Cloudflare proxying
+        apex_proxy = any(
+            r["name"] == "@" and r["ingress"] == "caddy" for r in zone_records
+        )
 
         lines.append(f'D("{zone}", REG_NONE, DnsProvider(DSP_CLOUDFLARE),')
-        lines.append(f'  A("{public_target_label}", "{public_ip}"),')
 
+        # Top-level A record for the zone apex
+        if apex_proxy:
+            apex_meta = json.dumps({"cloudflare_proxy": "on"}, separators=(",", ": "))
+            lines.append(f'  A("@", "{public_ip}", {apex_meta}),')
+        else:
+            lines.append(f'  A("@", "{public_ip}"),')
+
+        # Non-apex records as CNAMEs pointing to the zone apex
         for record in zone_records:
+            if record["name"] == "@":
+                continue  # Covered by the A record above
             proxy_value = "on" if record["ingress"] == "caddy" else "off"
             cloudflare_meta = json.dumps({"cloudflare_proxy": proxy_value}, separators=(",", ": "))
             lines.append(
-                f'  CNAME("{record["name"]}", "{public_target_fqdn}", {cloudflare_meta}),'
+                f'  CNAME("{record["name"]}", "{zone_fqdn}", {cloudflare_meta}),'
             )
 
         lines.append(");")
@@ -186,19 +233,20 @@ def _render_creds_json(*, api_token: str | None) -> str:
 
 
 def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
-    tool_dir = Path(__file__).resolve().parent / "dnscontrol"
+    repo_root = Path(__file__).resolve().parents[1]
+    default_output_dir = repo_root / "generated" / "dnscontrol"
     config_path, config = pre_parse_config(argv)
     globals_cfg = get_effective_table(config, "globals", legacy_root_fallback=True)
     dnscontrol_cfg = get_effective_table(config, "dnscontrol")
     caddy_cfg = get_effective_table(config, "caddy")
 
     default_zones = _load_zone_list(dnscontrol_cfg=dnscontrol_cfg, caddy_cfg=caddy_cfg)
-    default_output_dir = Path(get_config_value(dnscontrol_cfg, "output_dir", str(tool_dir)))
+    default_output_dir_cfg = Path(get_config_value(dnscontrol_cfg, "output_dir", str(default_output_dir)))
     default_dnsconfig_output = Path(
-        get_config_value(dnscontrol_cfg, "dnsconfig_output", str(default_output_dir / "dnsconfig.js"))
+        get_config_value(dnscontrol_cfg, "dnsconfig_output", str(default_output_dir_cfg / "dnsconfig.js"))
     )
     default_creds_output = Path(
-        get_config_value(dnscontrol_cfg, "creds_output", str(default_output_dir / "creds.json"))
+        get_config_value(dnscontrol_cfg, "creds_output", str(default_output_dir_cfg / "creds.json"))
     )
 
     parser = argparse.ArgumentParser(
@@ -225,6 +273,12 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
         help="GID for Services sheet",
     )
     parser.add_argument(
+        "--zones-gid",
+        type=int,
+        default=int(get_config_value(globals_cfg, "zones_gid", 0)),
+        help="GID for Zones sheet (used to determine which zones have external DNS views)",
+    )
+    parser.add_argument(
         "--public-ip",
         default=str(
             get_config_value(
@@ -234,11 +288,6 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
             )
         ),
         help="Public IPv4 address used by generated Cloudflare records",
-    )
-    parser.add_argument(
-        "--public-target-label",
-        default=str(get_config_value(dnscontrol_cfg, "public_target_label", "_public")),
-        help="DNS label created per zone and used as the CNAME target",
     )
     parser.add_argument(
         "--zone",
@@ -311,11 +360,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    public_target_label = as_str(args.public_target_label).strip(".")
-    if not public_target_label:
-        print("Error: public_target_label must not be empty", file=sys.stderr)
-        return 2
-
     zones = sorted({_normalize_name(zone) for zone in args.zones if _normalize_name(zone)}, key=str.lower)
     if not zones:
         print(
@@ -323,6 +367,37 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    # Fetch the Zones tab and restrict to zones with "external" in DNS Views.
+    try:
+        external_zones = _load_external_zones_from_sheet(
+            sheet_url=str(args.sheet_url),
+            zones_gid=int(args.zones_gid),
+            debug=bool(args.debug),
+        )
+    except Exception as exc:
+        print(f"Error: failed to load zones sheet: {exc}", file=sys.stderr)
+        return 1
+
+    if not external_zones:
+        print(
+            "Error: no zones with 'external' DNS view found in Zones sheet",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Only generate records for zones that have an external DNS view.
+    zones = sorted(set(zones) & set(external_zones), key=str.lower)
+    if not zones:
+        print(
+            "Error: none of the configured zones have 'external' in DNS Views on the Zones sheet",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.debug:
+        print(f"[dnscontrol debug] external zones from sheet: {external_zones}", file=sys.stderr)
+        print(f"[dnscontrol debug] effective zones for generation: {zones}", file=sys.stderr)
 
     services_url = build_sheet_url(str(args.sheet_url), int(args.services_gid))
 
@@ -339,7 +414,7 @@ def main(argv: list[str] | None = None) -> int:
         if not cloudflare_api_token and cloudflare_token_env:
             cloudflare_api_token = as_str(os.environ.get(cloudflare_token_env))
 
-        records = _collect_public_cname_records(
+        records = _collect_public_records(
             services_df=services_df,
             zones=zones,
             debug=bool(args.debug),
@@ -347,7 +422,6 @@ def main(argv: list[str] | None = None) -> int:
         dnsconfig_content = _render_dnsconfig(
             zones=zones,
             public_ip=public_ip,
-            public_target_label=public_target_label,
             records=records,
         )
         creds_content = _render_creds_json(api_token=cloudflare_api_token or None)
@@ -362,7 +436,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Generated {dnsconfig_output}")
     print(f"Generated {creds_output}")
-    print(f"Generated {len(records)} public CNAME record(s) across {len(zones)} zone(s)")
+    print(f"Generated {len(records)} public record(s) across {len(zones)} zone(s)")
 
     if args.apply:
         if not cloudflare_api_token:

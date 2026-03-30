@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import curses
 import datetime as _dt
-import io
 import logging
 import os
 import re
@@ -14,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import requests
 
 from .config import (
     DEFAULT_SHEET_URL,
@@ -26,13 +24,7 @@ from .config import (
 )
 from .logging_utils import configure_logging
 from .mikrotik_utils import mikrotik_quote, sanitize_filename_component
-from .sheets import (
-    as_str,
-    build_sheet_url,
-    df_with_normalized_columns,
-    normalize_column_name,
-    normalize_ip,
-)
+from .sheets import as_str, normalize_column_name, normalize_ip
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +52,9 @@ def _load_sheet_df(
     timeout_seconds: float,
     label: str,
 ) -> pd.DataFrame:
-    url = build_sheet_url(sheet_url, int(gid))
-    print(f"Loading {label} sheet data...", file=sys.stderr, flush=True)
-
-    response = requests.get(url, timeout=timeout_seconds)
-    response.raise_for_status()
-    return df_with_normalized_columns(pd.read_csv(io.StringIO(response.text)))
+    # Use the singleton cache from sheets.py
+    from .sheets import get_sheet_df
+    return get_sheet_df(sheet_url, gid, timeout_seconds, label)
 
 
 def _has_interactive_tty() -> bool:
@@ -102,6 +91,7 @@ class ParsedInput:
     service_name: str
     hostname: str
     ingress: str
+    exposure: str
     protocol: str
     frontend_ports: list[int]
     backend_ports: list[int]
@@ -116,6 +106,9 @@ class ParsedInput:
     enable_nat: bool
     enable_filter: bool
     enable_dhcp: bool
+    use_input_chain: bool
+    place_before_filter_comment: str | None
+    place_before_input_comment: str | None
     dhcp_mac: str | None
     dhcp_address: str | None
     dhcp_subnet: str | None
@@ -413,6 +406,40 @@ def _prefill_from_nodes_sheet(
         }
 
     return {}
+
+
+def _resolve_hostname_ip_from_nodes(
+    *,
+    sheet_url: str,
+    nodes_gid: int,
+    timeout_seconds: float,
+    hostname: str,
+    ip_column: str,
+) -> str | None:
+    """Look up a hostname in the Nodes sheet and return its IP address.
+
+    Matches against both the ``hostname`` and ``dns_name`` columns
+    (case-insensitive exact match).  Returns ``None`` when not found.
+    """
+    target = hostname.strip().lower()
+    if not target:
+        return None
+
+    df = _load_sheet_df(
+        sheet_url=sheet_url,
+        gid=int(nodes_gid),
+        timeout_seconds=timeout_seconds,
+        label="Nodes",
+    )
+    for _, row in df.iterrows():
+        node_name = as_str(row.get("hostname")).lower()
+        dns_name = as_str(row.get("dns_name")).lower()
+        if target not in {node_name, dns_name}:
+            continue
+        ip = normalize_ip(as_str(row.get(ip_column)))
+        if ip:
+            return ip
+    return None
 
 
 def _list_node_hostnames_from_nodes_sheet(
@@ -715,6 +742,9 @@ def _normalize_form(
     vlan_map: dict[str, dict[str, str]],
     *,
     caddy_ip: str,
+    input_chain_hosts: list[str] | None = None,
+    place_before_filter_comment: str | None = None,
+    place_before_input_comment: str | None = None,
 ) -> ParsedInput:
     source_vlan = form_data.source_vlan.strip().lower()
     destination_vlan = form_data.destination_vlan.strip().lower()
@@ -730,13 +760,36 @@ def _normalize_form(
     if ingress not in {"dstnat", "direct", "caddy"}:
         ingress = "dstnat"
 
+    exposure = form_data.exposure.strip().lower()
+    if exposure not in {"public", "non-public"}:
+        exposure = "public"
+
+    # Auto-disable NAT for non-public services — they should never be
+    # reachable from WAN via dstnat.
+    is_public = exposure == "public"
+    enable_nat = _to_bool(form_data.enable_nat) and is_public
+
+    # For caddy-ingress services, per-service dstnat is never needed;
+    # the shared caddy-dstnat.rsc handles WAN:80/443 → Caddy IP.
+    if ingress == "caddy":
+        enable_nat = False
+
     backend_ip = normalize_ip(form_data.backend_ip)
     caddy_ip_normalized = normalize_ip(caddy_ip)
+
+    # Determine whether the backend is the router itself (INPUT chain).
+    hostname_lower = form_data.hostname.strip().lower()
+    use_input_chain = bool(
+        input_chain_hosts
+        and hostname_lower
+        and hostname_lower in {h.strip().lower() for h in input_chain_hosts}
+    )
 
     return ParsedInput(
         service_name=form_data.service_name.strip() or form_data.service_key.strip() or "service",
         hostname=form_data.hostname.strip(),
         ingress=ingress,
+        exposure=exposure,
         protocol=protocol,
         frontend_ports=_normalize_ports_lenient(form_data.frontend_ports),
         backend_ports=_normalize_ports_lenient(form_data.backend_ports),
@@ -750,9 +803,12 @@ def _normalize_form(
         dst_address_list=(
             form_data.destination_address_list.strip() or destination_cfg.get("address_list") or None
         ),
-        enable_nat=_to_bool(form_data.enable_nat),
+        enable_nat=enable_nat,
         enable_filter=_to_bool(form_data.enable_filter),
         enable_dhcp=_to_bool(form_data.enable_dhcp),
+        use_input_chain=use_input_chain,
+        place_before_filter_comment=place_before_filter_comment or None,
+        place_before_input_comment=place_before_input_comment or None,
         dhcp_mac=form_data.dhcp_mac.strip() or None,
         dhcp_address=normalize_ip(form_data.dhcp_address),
         dhcp_subnet=form_data.dhcp_subnet.strip() or None,
@@ -773,7 +829,7 @@ def _port_mappings(frontend_ports: list[int], backend_ports: list[int]) -> list[
 
 def _render_commands(parsed: ParsedInput) -> list[str]:
     commands: list[str] = []
-    label = parsed.service_name
+    is_public = parsed.exposure == "public"
 
     mappings = _port_mappings(parsed.frontend_ports, parsed.backend_ports)
     backend_ports_for_lists: set[int] = set()
@@ -785,20 +841,14 @@ def _render_commands(parsed: ParsedInput) -> list[str]:
             if backend_port > 0:
                 backend_ports_for_lists.add(int(backend_port))
 
-    if parsed.ingress == "caddy" and parsed.caddy_ip:
-        comment = f"{COMMENT_MARKER}; single-service address-list; caddy-hosts; {label}"
-        commands.append(
-            "/ip firewall address-list add "
-            f"list={ADDRESS_LIST_CADDY_HOSTS} address={parsed.caddy_ip} "
-            f"comment={mikrotik_quote(comment)}"
-        )
+    # --- Address-list entries (always useful for filter rules) ---
 
     if parsed.backend_ip:
         for backend_port in sorted(backend_ports_for_lists):
             list_name = _backend_group_list_name(parsed.protocol, backend_port)
             comment = (
-                f"{COMMENT_MARKER}; single-service address-list; backend-group; "
-                f"{parsed.protocol}:{backend_port}; {label}"
+                f"{COMMENT_MARKER}; backend-group; "
+                f"{parsed.protocol}:{backend_port}"
             )
             commands.append(
                 "/ip firewall address-list add "
@@ -806,56 +856,88 @@ def _render_commands(parsed: ParsedInput) -> list[str]:
                 f"comment={mikrotik_quote(comment)}"
             )
 
-    nat_target_ip = parsed.caddy_ip if parsed.ingress == "caddy" and parsed.caddy_ip else parsed.backend_ip
-
-    if parsed.enable_nat and nat_target_ip and mappings:
+    # --- dstnat NAT rules ---
+    # Only for public, non-caddy services (caddy dstnat is in caddy-dstnat.rsc).
+    # ingress=direct or ingress=dstnat with exposure=public.
+    if parsed.enable_nat and parsed.backend_ip and mappings:
         for frontend_port, backend_port in mappings:
             comment = (
-                f"{COMMENT_MARKER}; single-service nat; {label}; "
-                f"{parsed.protocol}:{frontend_port}->{nat_target_ip}:{backend_port}"
+                f"{COMMENT_MARKER}; dstnat; "
+                f"{parsed.protocol}:{frontend_port}->{backend_port}"
             )
             commands.append(
                 "/ip firewall nat add chain=dstnat action=dst-nat "
                 f"in-interface-list=WAN protocol={parsed.protocol} dst-port={frontend_port} "
-                f"to-addresses={nat_target_ip} to-ports={backend_port} "
+                f"to-addresses={parsed.backend_ip} to-ports={backend_port} "
                 f"comment={mikrotik_quote(comment)}"
             )
 
+    # --- Firewall filter rules ---
     if parsed.enable_filter and parsed.backend_ip:
+        # Choose chain: input for router-destined traffic, forward otherwise.
+        chain = "input" if parsed.use_input_chain else "forward"
+
         for _, backend_port in mappings or [(0, parsed.backend_ports[0] if parsed.backend_ports else 0)]:
             if backend_port <= 0:
                 continue
             backend_list = _backend_group_list_name(parsed.protocol, int(backend_port))
             parts = [
-                "/ip firewall filter add chain=forward action=accept",
+                f"/ip firewall filter add chain={chain} action=accept",
                 f"protocol={parsed.protocol}",
                 f"dst-port={backend_port}",
-                f"dst-address-list={backend_list}",
             ]
+            # For input-chain rules the dst is the router itself, so
+            # dst-address-list is not meaningful; for forward, reference
+            # the backend address-list.
+            if not parsed.use_input_chain:
+                parts.append(f"dst-address-list={backend_list}")
+
+            # Source constraints
             if parsed.source_ip:
                 parts.append(f"src-address={parsed.source_ip}")
             if parsed.source_address_list:
                 parts.append(f"src-address-list={parsed.source_address_list}")
             elif parsed.ingress == "caddy":
                 parts.append(f"src-address-list={ADDRESS_LIST_CADDY_HOSTS}")
+
+            # Interface constraints
             if parsed.in_interface:
                 parts.append(f"in-interface={parsed.in_interface}")
             if parsed.in_interface_list:
                 parts.append(f"in-interface-list={parsed.in_interface_list}")
-            if parsed.out_interface:
+            elif not is_public and not parsed.in_interface:
+                # Non-public services default to LAN-only access when no
+                # explicit source VLAN / interface is specified.
+                parts.append("in-interface-list=LAN")
+
+            if parsed.out_interface and not parsed.use_input_chain:
                 parts.append(f"out-interface={parsed.out_interface}")
-            if parsed.dst_address_list:
+            if parsed.dst_address_list and not parsed.use_input_chain:
                 parts.append(f"dst-address-list={parsed.dst_address_list}")
 
             comment = (
-                f"{COMMENT_MARKER}; single-service filter; {label}; "
-                f"{parsed.protocol}:{backend_port}->{parsed.backend_ip}"
+                f"{COMMENT_MARKER}; {chain}; "
+                f"{parsed.protocol}:{backend_port}"
             )
             parts.append(f"comment={mikrotik_quote(comment)}")
+
+            # Insert before a known anchor rule so new rules land in the
+            # correct position without manual reordering.
+            place_comment = (
+                parsed.place_before_input_comment
+                if parsed.use_input_chain
+                else parsed.place_before_filter_comment
+            )
+            if place_comment:
+                parts.append(
+                    f"place-before=[find comment={mikrotik_quote(place_comment)}]"
+                )
+
             commands.append(" ".join(parts))
 
+    # --- DHCP lease ---
     if parsed.enable_dhcp and parsed.dhcp_mac and parsed.dhcp_address:
-        comment = f"{COMMENT_MARKER}; single-service dhcp; {label}"
+        comment = f"{COMMENT_MARKER}; dhcp-lease; {parsed.dhcp_mac}"
         commands.append(
             "/ip dhcp-server lease add "
             f"mac-address={parsed.dhcp_mac} address={parsed.dhcp_address} "
@@ -865,8 +947,49 @@ def _render_commands(parsed: ParsedInput) -> list[str]:
     return commands
 
 
+def _render_caddy_dstnat(caddy_ip: str) -> str:
+    """Render the shared Caddy dstnat .rsc file content.
+
+    This contains the WAN:80/443 → Caddy IP dstnat rules that are shared
+    across all caddy-ingress services.
+    """
+    timestamp = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    addr_list_comment = f"{COMMENT_MARKER}; caddy-hosts"
+    comment_80 = f"{COMMENT_MARKER}; caddy-dstnat; WAN:80->{caddy_ip}:80"
+    comment_443 = f"{COMMENT_MARKER}; caddy-dstnat; WAN:443->{caddy_ip}:443"
+    lines = [
+        f"# {COMMENT_MARKER}",
+        f"# generated_at={timestamp}",
+        "# Shared Caddy reverse-proxy address-list and dstnat rules.",
+        "# These forward WAN HTTP/HTTPS traffic to the Caddy instance.",
+        f"# caddy_ip={caddy_ip}",
+        "",
+        (
+            "/ip firewall address-list add "
+            f"list={ADDRESS_LIST_CADDY_HOSTS} address={caddy_ip} "
+            f"comment={mikrotik_quote(addr_list_comment)}"
+        ),
+        "",
+        (
+            "/ip firewall nat add chain=dstnat action=dst-nat "
+            f"in-interface-list=WAN protocol=tcp dst-port=80 "
+            f"to-addresses={caddy_ip} to-ports=80 "
+            f"comment={mikrotik_quote(comment_80)}"
+        ),
+        (
+            "/ip firewall nat add chain=dstnat action=dst-nat "
+            f"in-interface-list=WAN protocol=tcp dst-port=443 "
+            f"to-addresses={caddy_ip} to-ports=443 "
+            f"comment={mikrotik_quote(comment_443)}"
+        ),
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def _build_parser(argv: list[str] | None = None) -> argparse.Namespace:
-    tool_dir = Path(__file__).resolve().parent / "mikrotik"
+    repo_root = Path(__file__).resolve().parents[1]
+    default_output_dir = repo_root / "generated" / "mikrotik"
     config_path, config = pre_parse_config(argv)
 
     globals_cfg = get_table(config, "globals")
@@ -907,14 +1030,24 @@ def _build_parser(argv: list[str] | None = None) -> argparse.Namespace:
         default=float(get_config_value(globals_cfg, "sheet_timeout_seconds", 10)),
         help="Timeout in seconds for downloading Google Sheet CSV data",
     )
-    caddy_ip_default = str(get_config_value(globals_cfg, "caddy_ip", "")).strip()
+    # Resolve Caddy IP/hostname: prefer mikrotik.caddy_ips[0], fall back to globals.caddy_host.
+    # The value may be an IP or a hostname — _resolve_caddy_ip() handles both at runtime.
+    caddy_ip_default = ""
     fw_caddy_ips = get_config_value(fw_cfg, "caddy_ips", [])
-    if not caddy_ip_default and isinstance(fw_caddy_ips, list) and fw_caddy_ips:
+    if isinstance(fw_caddy_ips, list) and fw_caddy_ips:
         caddy_ip_default = str(fw_caddy_ips[0]).strip()
+    if not caddy_ip_default:
+        caddy_ip_default = str(get_config_value(globals_cfg, "caddy_host", "")).strip()
+    if not caddy_ip_default:
+        # Legacy fallback for older configs.
+        caddy_ip_default = str(
+            get_config_value(globals_cfg, "caddy_ip",
+                             get_config_value(globals_cfg, "caddy_hostname", ""))
+        ).strip()
     parser.add_argument(
         "--caddy-ip",
         default=caddy_ip_default,
-        help="Caddy proxy IP used when ingress=caddy",
+        help="Caddy proxy IP or hostname (resolved from Nodes sheet) used when ingress=caddy",
     )
     parser.add_argument("--service", default="", help="Optional service key to pre-select")
     parser.add_argument(
@@ -923,10 +1056,19 @@ def _build_parser(argv: list[str] | None = None) -> argparse.Namespace:
         help="Skip interactive UI and generate directly from sheet-derived values (requires --service)",
     )
     parser.add_argument(
+        "--caddy-dstnat-only",
+        action="store_true",
+        help=(
+            "Generate only the shared caddy-dstnat.rsc file (WAN:80/443 → Caddy IP) "
+            "without generating a per-service .rsc. The Caddy IP is resolved from the "
+            "Nodes sheet via --caddy-ip (hostname or IP)."
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path(
-            str(get_config_value(fw_cfg, "output", str(tool_dir / "mikrotik-single-service.rsc")))
+            str(get_config_value(fw_cfg, "output", str(default_output_dir)))
         ),
         help="Directory where per-service .rsc files are written",
     )
@@ -935,11 +1077,41 @@ def _build_parser(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _resolve_caddy_ip(
+    *,
+    caddy_ip_raw: str,
+    sheet_url: str,
+    nodes_gid: int,
+    timeout_seconds: float,
+    ip_column: str,
+) -> str | None:
+    """Resolve the Caddy IP from a raw value that may be a hostname or IP.
+
+    If the value is already a valid IP it is returned directly.  Otherwise
+    it is treated as a hostname and looked up in the Nodes sheet.
+    """
+    raw = (caddy_ip_raw or "").strip()
+    if not raw:
+        return None
+    # Try as a literal IP first.
+    direct = normalize_ip(raw)
+    if direct:
+        return direct
+    # Fall back to Nodes sheet hostname lookup.
+    return _resolve_hostname_ip_from_nodes(
+        sheet_url=sheet_url,
+        nodes_gid=nodes_gid,
+        timeout_seconds=timeout_seconds,
+        hostname=raw,
+        ip_column=ip_column,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser(argv)
     configure_logging(debug=bool(args.debug))
 
-    if not args.no_prompt and not _has_interactive_tty():
+    if not args.no_prompt and not args.caddy_dstnat_only and not _has_interactive_tty():
         print(
             "Error: interactive terminal required for curses UI (stdin/stdout must be a TTY).",
             file=sys.stderr,
@@ -955,6 +1127,38 @@ def main(argv: list[str] | None = None) -> int:
     ip_column = normalize_column_name(str(get_config_value(lease_cfg, "ip_column", "IP Address")))
     subnet_column = normalize_column_name(str(get_config_value(lease_cfg, "subnet_column", "Subnet")))
     mac_column = normalize_column_name(str(get_config_value(lease_cfg, "mac_column", "MAC Address")))
+
+    # ---- Resolve the Caddy IP (hostname or literal) via Nodes sheet ----
+    caddy_ip_resolved = _resolve_caddy_ip(
+        caddy_ip_raw=str(args.caddy_ip),
+        sheet_url=str(args.sheet_url),
+        nodes_gid=int(args.nodes_gid),
+        timeout_seconds=float(args.sheet_timeout),
+        ip_column=ip_column,
+    )
+
+    # ---- Standalone caddy-dstnat generation ----
+    if args.caddy_dstnat_only:
+        if not caddy_ip_resolved:
+            print(
+                f"Error: unable to resolve Caddy IP from '{args.caddy_ip}'. "
+                "Provide a valid IP or a hostname present in the Nodes sheet.",
+                file=sys.stderr,
+            )
+            return 1
+        output_base = resolve_path_relative_to_config(
+            Path(args.config).expanduser().resolve(),
+            Path(args.output),
+        )
+        output_dir = output_base.parent if output_base.suffix else output_base
+        caddy_dstnat_content = _render_caddy_dstnat(caddy_ip_resolved)
+        caddy_dstnat_path = output_dir / "caddy-dstnat.rsc"
+        caddy_dstnat_path.parent.mkdir(parents=True, exist_ok=True)
+        caddy_dstnat_path.write_text(caddy_dstnat_content, encoding="utf-8")
+        print(f"Wrote {caddy_dstnat_path}")
+        if args.stdout:
+            print(caddy_dstnat_content)
+        return 0
 
     selection_options: dict[str, list[str]] = {}
     if not args.no_prompt:
@@ -1100,10 +1304,28 @@ def main(argv: list[str] | None = None) -> int:
             print("Aborted")
             return 130
 
+    # Read input_chain_hosts from config — hostnames whose services use
+    # the INPUT chain (router/switch management UIs) instead of FORWARD.
+    fw_cfg = get_table(config, "mikrotik") or get_table(config, "firewall")
+    input_chain_hosts: list[str] = []
+    raw_hosts = get_config_value(fw_cfg, "input_chain_hosts", [])
+    if isinstance(raw_hosts, list):
+        input_chain_hosts = [str(h).strip() for h in raw_hosts if str(h).strip()]
+
+    place_before_filter_comment = str(
+        get_config_value(fw_cfg, "place_before_filter_rule_comment", "")
+    ).strip() or None
+    place_before_input_comment = str(
+        get_config_value(fw_cfg, "place_before_input_rule_comment", "")
+    ).strip() or None
+
     parsed = _normalize_form(
         form,
         vlan_map,
-        caddy_ip=str(args.caddy_ip),
+        caddy_ip=caddy_ip_resolved or "",
+        input_chain_hosts=input_chain_hosts,
+        place_before_filter_comment=place_before_filter_comment,
+        place_before_input_comment=place_before_input_comment,
     )
 
     if parsed.enable_dhcp and parsed.dhcp_address and not parsed.dhcp_mac:
@@ -1158,6 +1380,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.stdout:
         print(content)
+
+    # Write shared caddy-dstnat.rsc when a Caddy IP is configured.
+    if caddy_ip_resolved:
+        caddy_dstnat_content = _render_caddy_dstnat(caddy_ip_resolved)
+        caddy_dstnat_path = output_dir / "caddy-dstnat.rsc"
+        caddy_dstnat_path.parent.mkdir(parents=True, exist_ok=True)
+        caddy_dstnat_path.write_text(caddy_dstnat_content, encoding="utf-8")
+        print(f"Wrote {caddy_dstnat_path}")
 
     return 0
 

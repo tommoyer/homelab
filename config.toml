@@ -10,19 +10,22 @@
 sheet_url = "https://docs.google.com/spreadsheets/d/1f4emn4uIPscEgOHtgmETODlTvz1eh2xZlnpBBNGQlWA/export?format=csv&gid=0"
 
 # Sheet gids (used by multiple tools)
+zones_gid = 0
 nodes_gid = 344016240
 services_gid = 157827580
 helpers_gid = 230264716
 # subnets_gid = 0  # Set to the actual GID of your Subnets tab to enable intra-VLAN rule suppression
 
-# DNS hostname of the Caddy server (used as a CNAME target by pihole when ingress=caddy)
-caddy_hostname = "caddy.dmz.moyer.wtf"
+# DNS hostname of the Caddy server as it appears in the Nodes sheet.
+# Used everywhere a reference to the Caddy node is needed:
+#   - pihole: extracts the short hostname (first label) for CNAME targets
+#   - caddyfile: health-check listener binding + deploy SSH target
+#   - mikrotik: resolved to IP via Nodes sheet for firewall rules
+# When set to a hostname (not an IP), tools resolve it from the Nodes sheet.
+caddy_host = "caddy.dmz.moyer.wtf"
 
 # Public WAN IPv4 used for internet-facing DNS records.
-public_ip = ""
-
-# Caddy proxy IP in the DMZ VLAN (used by multiple tools)
-caddy_ip = "192.168.20.2"
+public_ip = "207.144.81.217"
 
 # Default MikroTik RouterOS connection target
 mikrotik_host = "192.168.10.1"
@@ -44,41 +47,37 @@ ssh_identity_file = ""
 # This file is read by the deploy tool and injected into rendered pve-scripts/*.vars.
 ssh_authorized_key_file = "~/.ssh/id_rsa.pub"
 
+pve_scripts_base_url = "https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/"
+
+[tailscale]
+# Tailscale integration for transparent host resolution.
+# When enabled, hostnames are resolved against the Tailnet peer list first,
+# falling back to Google Sheet IPs when a host is not on the Tailnet.
+
+# Your Tailnet domain (e.g. "tail12345.ts.net"). Required for FQDN resolution.
+tailnet_domain = "duckbill-frog.ts.net"
+
+# Enable/disable Tailscale-first resolution globally.
+enabled = true
+
+# Path or name of the tailscale CLI binary.
+# command = "tailscale"
+
 [pihole]
 # Example overrides (optional):
 # sheet_url = "https://.../export?format=csv&gid=0"  # defaults to globals.sheet_url
 # nodes_gid = 344016240                               # defaults to globals.nodes_gid
 
 # Template + output paths (relative paths resolve relative to this file)
-template = "./homelab/pihole/pihole.toml.j2"
-output = "./homelab/pihole/pihole.toml"
+template = "./templates/pihole/pihole.toml.j2"
+output = "./generated/pihole/pihole.toml"
 
 # Pi-hole instance SSH settings (used with --apply)
 pihole_user = "root"
-pihole_host = "192.168.100.2"
+pihole_host = "pihole"
 
 # Whether to use sudo for remote operations during --apply.
 use_sudo = false
-
-[dnsmasq]
-# dnsmasq trusted-services generator configuration.
-# Uses [globals].sheet_url and [globals].services_gid by default.
-template = "./homelab/dnsmasq/addresses.conf.j2"
-output = "./homelab/dnsmasq/addresses.conf"
-
-# Node key used to resolve Tailscale IP for ingress=caddy and exposure=trusted services.
-# Defaults to [globals].caddy_hostname when omitted.
-# caddy_node = "caddy.dmz.moyer.wtf"
-
-# Optional override for tailscale executable path.
-# tailscale_command = "tailscale"
-
-[dnsmasq.dnsmasq_deploy]
-host = "caddy.dmz.moyer.wtf"
-username = "root"
-path = "/etc/dnsmasq.d/addresses.conf"
-restart_command = "sudo systemctl restart dnsmasq"
-port = 22
 
 [dnscontrol]
 # dnscontrol file generator for Cloudflare public records.
@@ -100,9 +99,9 @@ cloudflare_token_env = "CLOUDFLARE_API_TOKEN"
 dnscontrol_command = "dnscontrol"
 
 # Output files (relative to this config file if not absolute).
-output_dir = "./homelab/dnscontrol"
-dnsconfig_output = "./homelab/dnscontrol/dnsconfig.js"
-creds_output = "./homelab/dnscontrol/creds.json"
+output_dir = "./generated/dnscontrol"
+dnsconfig_output = "./generated/dnscontrol/dnsconfig.js"
+creds_output = "./generated/dnscontrol/creds.json"
 
 [mikrotik]
 # Prompt-driven MikroTik generation metadata.
@@ -114,7 +113,7 @@ subnet_column = "Subnet"
 mac_column = "MAC Address"
 
 # One or more Caddy proxy IPs in the DMZ VLAN.
-# Defaults to [globals].caddy_ip if omitted. May also be provided at runtime via --caddy-ip.
+# Defaults to [globals].caddy_host if omitted. May also be provided at runtime via --caddy-ip.
 # caddy_ips = ["192.168.20.2"]
 
 # Interface names (match your RouterOS config).
@@ -122,7 +121,14 @@ dmz_interface = "vlan20-dmz"
 homelab_interface = "vlan30-homelab"
 
 # Default output base path used by prompt mode.
-output = "./homelab/mikrotik"
+output = "./generated/mikrotik"
+
+# Hostnames (from Nodes sheet) whose backend IP is the router/switch itself.
+# Services targeting these hosts generate INPUT chain rules instead of FORWARD.
+input_chain_hosts = ["hexs.mgmt.moyer.wtf"]
+
+place_before_filter_rule_comment = "block inter-VLAN (default deny)"
+place_before_input_rule_comment = "drop all other input"
 
 # VLAN definitions for ingress=direct and ingress=dstnat+source_vlans rules.
 # Keys must match the values used in the "Source VLANs" column of the Services
@@ -142,27 +148,27 @@ hivemind = { interface = "vlan100-clients" }
 # Caddyfile generator configuration.
 # This section inherits from [globals] (e.g. sheet_url/nodes_gid) unless overridden here.
 
-
-
 # Sheet configuration
 # sheet_url = "https://.../export?format=csv&gid=0"  # defaults to globals.sheet_url
 # caddy_gid = 0                                      # required (Services tab)
 # nodes_gid = 344016240                              # optional (backend hostname->IP lookup)
 
 # Filesystem paths
-template = "./homelab/caddy/Caddyfile.j2"           # default: network.old/caddy/Caddyfile.template
-output = "./homelab/caddy/Caddyfile"                     # default: network.old/caddy/downloads/Caddyfile
-work_dir = "./homelab/caddy/downloads"                    # default: network.old/caddy/downloads
+template = "./templates/caddy/Caddyfile.j2"
+output = "./generated/caddy/Caddyfile"
+work_dir = "./generated/caddy/downloads"
 # dump_json = false
 
 # Zones
 caddy_zones = [
   { zone = "moyer.wtf", wildcard = true, redirect_www = false },
   { zone = "thomasmoyer.org", wildcard = true, redirect_www = false },
+  { zone = "duckbill-frog.ts.net", wildcard = true, redirect_www = false, tls_mode = "tailscale" }
 ]
 
 [caddy.caddy_deploy]
-host = "caddy.dmz.moyer.wtf"              # ssh target host
+# host defaults to [globals].caddy_host if omitted.
+# host = "caddy.dmz.moyer.wtf"
 username = "root"                          # ssh username
 path = "/etc/caddy/Caddyfile"               # remote destination path
 restart_command = "sudo systemctl reload caddy"  # command run over ssh
@@ -178,6 +184,8 @@ port = 22
 # }
 
 [deploy]
-proxmox_host = "192.168.10.10"
+proxmox_host = "proxmox.moyer.wtf"
 proxmox_user = "root@pam"
 proxmox_password_env = "PROXMOX_PASSWORD"
+render_dir = "./generated/pve-scripts"
+templates_dir = "./templates/pve-scripts"

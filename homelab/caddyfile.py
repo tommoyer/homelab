@@ -22,6 +22,7 @@ from .config import (
     resolve_path_relative_to_config,
 )
 from .logging_utils import configure_logging
+from .resolver import build_resolver
 from .sheets import (
     as_str,
     build_sheet_url,
@@ -130,11 +131,15 @@ def normalize_zone_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
             zone = item.get("zone")
             if not isinstance(zone, str) or not zone.strip():
                 continue
+            tls_mode = str(item.get("tls_mode", "cloudflare")).strip().lower()
+            if tls_mode not in ("cloudflare", "tailscale"):
+                tls_mode = "cloudflare"
             zones.append(
                 {
                     "zone": zone.strip(),
                     "wildcard": bool(item.get("wildcard", True)),
                     "redirect_www": bool(item.get("redirect_www", False)),
+                    "tls_mode": tls_mode,
                 }
             )
         if zones:
@@ -148,7 +153,9 @@ def normalize_zone_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
             zone = item.get("zone")
             if isinstance(zone, str) and zone.strip():
-                zones.append({"zone": zone.strip(), "wildcard": True, "redirect_www": False})
+                zones.append(
+                    {"zone": zone.strip(), "wildcard": True, "redirect_www": False, "tls_mode": "cloudflare"}
+                )
     return zones
 
 
@@ -168,12 +175,15 @@ def generate_server_blocks(
         zone = zone_cfg["zone"]
         wildcard = zone_cfg.get("wildcard", True)
         redirect_www = zone_cfg.get("redirect_www", False)
+        tls_mode = zone_cfg.get("tls_mode", "cloudflare")
         hostnames = f"*.{zone} {zone}" if wildcard else zone
 
         map_entries = zone_map_entries.get(zone, [])
         handler_blocks = zone_handler_blocks.get(zone, [])
 
-        if redirect_www:
+        if tls_mode == "tailscale":
+            header_label = f"Tailnet Handler ({zone})"
+        elif redirect_www:
             header_label = f"Public Web: {zone} (redirect www -> apex)"
         elif wildcard:
             header_label = f"Public Wildcard Handler ({zone})"
@@ -185,12 +195,28 @@ def generate_server_blocks(
             f"# {header_label}",
             "# ------------------------------------------------------------------",
             f"{hostnames} {{",
-            "    # 1. Cloudflare DNS Challenge for Wildcard Certs",
-            "    tls {",
-            "        dns cloudflare {env.CLOUDFLARE_API_TOKEN}",
-            "    }",
-            "",
         ]
+
+        if tls_mode == "tailscale":
+            block.extend(
+                [
+                    "    # 1. Tailscale Certificate Provisioning",
+                    "    tls {",
+                    "        get_certificate tailscale",
+                    "    }",
+                    "",
+                ]
+            )
+        else:
+            block.extend(
+                [
+                    "    # 1. Cloudflare DNS Challenge for Wildcard Certs",
+                    "    tls {",
+                    "        dns cloudflare {env.CLOUDFLARE_API_TOKEN}",
+                    "    }",
+                    "",
+                ]
+            )
 
         if redirect_www:
             block.extend(
@@ -286,6 +312,7 @@ def collect_proxy_services_from_sheet(
                 print(f"[debug] Row {idx} protocol={protocol}; skipping", file=sys.stderr)
             continue
 
+        exposure = as_str(row.get("exposure")).lower() or "public"
         ignore_tls = parse_bool(row.get("tls"), default=False)
 
         backend_ip = normalize_ip(as_str(row.get("ip_address")))
@@ -317,6 +344,7 @@ def collect_proxy_services_from_sheet(
                 "fqdn": fqdn,
                 "backend": backend,
                 "ignore_tls": bool(ignore_tls),
+                "exposure": exposure,
             }
         )
 
@@ -355,7 +383,9 @@ def deploy_caddyfile_mux(
 
 
 def main(argv: list[str] | None = None) -> int:
-    default_dir = Path(__file__).resolve().parent / "caddy"
+    repo_root = Path(__file__).resolve().parents[1]
+    default_template_dir = repo_root / "templates" / "caddy"
+    default_output_dir = repo_root / "generated" / "caddy"
     config_path, config = pre_parse_config(argv)
     globals_cfg = get_effective_table(config, "globals", legacy_root_fallback=True)
     cfg = get_effective_table(config, "caddy", legacy_root_fallback=True)
@@ -399,19 +429,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--template",
         type=Path,
-        default=Path(get_config_value(cfg, "template", str(default_dir / "Caddyfile.template"))),
-        help="Path to Caddyfile template (default: Caddyfile.template next to this script)",
+        default=Path(get_config_value(cfg, "template", str(default_template_dir / "Caddyfile.j2"))),
+        help="Path to Caddyfile template (default: templates/caddy/Caddyfile.j2)",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path(get_config_value(cfg, "output", str(default_dir / "downloads" / "Caddyfile"))),
+        default=Path(get_config_value(cfg, "output", str(default_output_dir / "Caddyfile"))),
         help="Output path for generated Caddyfile",
     )
     parser.add_argument(
         "--work-dir",
         type=Path,
-        default=Path(get_config_value(cfg, "work_dir", str(default_dir / "downloads"))),
+        default=Path(get_config_value(cfg, "work_dir", str(default_output_dir / "downloads"))),
         help="Directory for downloaded/generated files",
     )
     parser.add_argument(
@@ -426,16 +456,16 @@ def main(argv: list[str] | None = None) -> int:
         dest="caddy_ip",
         default=get_config_value(
             globals_cfg,
-            "caddy_ip",
+            "caddy_host",
             get_config_value(
-                cfg,
+                globals_cfg,
                 "caddy_ip",
                 get_config_value(cfg, "health_check_ip", "127.0.0.1"),
             ),
         ),
         help=(
             "Caddy proxy IP/hostname in the DMZ VLAN (used by the template for the health check listener). "
-            "Defaults to [globals].caddy_ip; override via this flag."
+            "Defaults to [globals].caddy_host; override via this flag."
         ),
     )
 
@@ -543,6 +573,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Saved normalized services JSON to {json_path}")
 
     zones_config = normalize_zone_configs(cfg)
+    # Tailscale zones are not proxied through Caddy; filter them out.
+    zones_config = [z for z in zones_config if z["tls_mode"] != "tailscale"]
     zones = [zone_cfg["zone"] for zone_cfg in zones_config]
     if not zones:
         print(
@@ -608,10 +640,18 @@ def main(argv: list[str] | None = None) -> int:
         deploy_config = {}
 
     host = args.caddy_host or deploy_config.get("host")
+    # Fall back to globals.caddy_host for deploy target when not explicitly set.
+    if not host:
+        host = str(args.caddy_ip).strip() or None
     username = args.caddy_username or deploy_config.get("username")
     remote_path = args.caddy_path or deploy_config.get("path")
     restart_command = args.caddy_restart or deploy_config.get("restart_command")
     port_value = args.caddy_port or deploy_config.get("port")
+
+    # Resolve the deploy host through Tailscale if it is a hostname.
+    if host:
+        resolver = build_resolver(config)
+        host = resolver.resolve(str(host))
 
     port = None
     if port_value is not None:

@@ -19,6 +19,7 @@ from .config import (
     render_jinja_template,
     resolve_path_relative_to_config,
 )
+from .resolver import build_resolver
 from .sheets import as_str, build_sheet_url, df_with_normalized_columns, parse_bool
 from .ssh import (
     require_command,
@@ -50,11 +51,14 @@ def _toml_string_array(values: list[str]) -> str:
 
 
 def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
-    tool_dir = Path(__file__).resolve().parent / "pihole"
+    repo_root = Path(__file__).resolve().parents[1]
+    default_template_dir = repo_root / "templates" / "pihole"
+    default_output_dir = repo_root / "generated" / "pihole"
     config_path, config = pre_parse_config(argv)
     logger.debug("pihole: config_path=%s", config_path)
     globals_cfg = get_table(config, "globals")
     tool_cfg = get_table(config, "pihole")
+    tailscale_cfg = get_effective_table(config, "tailscale", legacy_root_fallback=False)
 
     parser = argparse.ArgumentParser(
         description=(
@@ -102,14 +106,14 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     parser.add_argument(
         "--template",
         type=Path,
-        default=Path(get_config_value(tool_cfg, "template", str(tool_dir / "pihole.toml.j2"))),
-        help="Path to the Jinja2 template TOML (default: pihole.toml.j2 next to this script)",
+        default=Path(get_config_value(tool_cfg, "template", str(default_template_dir / "pihole.toml.j2"))),
+        help="Path to the Jinja2 template TOML (default: templates/pihole/pihole.toml.j2)",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path(get_config_value(tool_cfg, "output", str(tool_dir / "pihole.toml"))),
-        help="Path to write the rendered TOML (default: pihole.toml next to this script)",
+        default=Path(get_config_value(tool_cfg, "output", str(default_output_dir / "pihole.toml"))),
+        help="Path to write the rendered TOML (default: generated/pihole/pihole.toml)",
     )
 
     parser.add_argument(
@@ -145,6 +149,15 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--tailnet",
+        default=get_config_value(tailscale_cfg, "tailnet_domain", ""),
+        help=(
+            "Tailscale tailnet domain (e.g. 'duckbill-frog.ts.net'). "
+            "Used for trusted CNAME targets. Defaults to tailscale.tailnet_domain from config."
+        ),
+    )
+
+    parser.add_argument(
         "--debug",
         action="store_true",
         default=bool(get_config_value(tool_cfg, "debug", False)),
@@ -169,7 +182,8 @@ def render_config(
     nodes_gid: int,
     services_gid: int,
     template_path: Path,
-    caddy_hostname: str,
+    caddy_host: str,
+    tailnet_domain: str,
     trace_hostname: str | None = None,
     debug: bool = False,
 ) -> str:
@@ -286,6 +300,7 @@ def render_config(
     service_cname_candidates: dict[str, list[tuple[str, str, bool, str]]] = defaultdict(list)
     for service_idx, row in services_df.iterrows():
         ingress = as_str(row.get("ingress")).lower()
+        exposure = as_str(row.get("exposure")).lower()
         frontend_hostname = as_str(row.get("frontend_hostname")).lower().rstrip(".")
         if not frontend_hostname:
             continue
@@ -293,15 +308,81 @@ def render_config(
         default_cname_target = parse_bool(row.get("default_cname_target"), default=False)
         row_hint = _sheet_row_hint(service_idx)
 
-        if ingress == "caddy":
-            target = (caddy_hostname or "").strip().lower().rstrip(".")
-            if not target:
+        if ingress == "caddy" and exposure == "trusted":
+            # Trusted caddy services point to the caddy node's Tailscale MagicDNS name.
+            # Extract the short hostname (first label) from the FQDN for CNAME building.
+            caddy_short = caddy_host.split(".")[0] if caddy_host else ""
+            if not caddy_short:
                 raise RuntimeError(
                     "caddy hostname is required to generate ingress=caddy CNAME records; "
-                    "set globals.caddy_hostname"
+                    "set globals.caddy_host"
                 )
+            if not tailnet_domain:
+                raise RuntimeError(
+                    "tailnet domain is required to generate trusted CNAME records; "
+                    "set tailscale.tailnet_domain or pass --tailnet"
+                )
+            target = f"{caddy_short}.{tailnet_domain}".rstrip(".")
+        elif ingress == "caddy" and exposure == "public":
+            # Public caddy services point to caddy.<dns_zone> from the sheet.
+            caddy_short = caddy_host.split(".")[0] if caddy_host else ""
+            if not caddy_short:
+                raise RuntimeError(
+                    "caddy hostname is required to generate ingress=caddy CNAME records; "
+                    "set globals.caddy_host"
+                )
+            dns_zone = as_str(row.get("dns_zone")).lower().rstrip(".")
+            if not dns_zone:
+                raise RuntimeError(
+                    f"Services row {row_hint}: ingress=caddy, exposure=public requires a "
+                    f"'DNS Zone' column value for frontend_hostname={frontend_hostname!r}"
+                )
+            target = f"{caddy_short}.{dns_zone}".rstrip(".")
+        elif ingress == "direct" and exposure == "trusted":
+            # Trusted direct services point to <hostname>.<tailnet>.
+            # Extract just the short hostname (first label) from the FQDN.
+            backend_hostname = as_str(row.get("hostname")).lower().rstrip(".")
+            if not backend_hostname:
+                logger.debug(
+                    "pihole: skipping service row with frontend_hostname=%r — no target hostname (ingress=%r)",
+                    frontend_hostname,
+                    ingress,
+                )
+                _trace(
+                    (
+                        f"Services row {row_hint}: skip because target hostname missing "
+                        f"(frontend={frontend_hostname!r}, ingress={ingress!r})"
+                    ),
+                    frontend_hostname,
+                )
+                continue
+            short_hostname = backend_hostname.split(".")[0]
+            if not tailnet_domain:
+                raise RuntimeError(
+                    "tailnet domain is required to generate trusted CNAME records; "
+                    "set tailscale.tailnet_domain or pass --tailnet"
+                )
+            target = f"{short_hostname}.{tailnet_domain}".rstrip(".")
+        elif ingress == "direct" and exposure == "public":
+            # Public direct services point to the backend hostname.
+            target = as_str(row.get("hostname")).lower().rstrip(".")
+            if not target:
+                logger.debug(
+                    "pihole: skipping service row with frontend_hostname=%r — no target hostname (ingress=%r)",
+                    frontend_hostname,
+                    ingress,
+                )
+                _trace(
+                    (
+                        f"Services row {row_hint}: skip because target hostname missing "
+                        f"(frontend={frontend_hostname!r}, ingress={ingress!r})"
+                    ),
+                    frontend_hostname,
+                )
+                continue
         else:
-            # For dstnat, blank, or any other ingress type, use the hostname column as the target.
+            # For dstnat, blank, or any other ingress/exposure combination,
+            # use the hostname column as the target.
             target = as_str(row.get("hostname")).lower().rstrip(".")
             if not target:
                 logger.debug(
@@ -504,14 +585,25 @@ def main(argv: list[str] | None = None) -> int:
         config = load_toml_or_exit(config_path)
         globals_cfg = get_effective_table(config, "globals", legacy_root_fallback=True)
 
-        caddy_hostname = str(get_config_value(globals_cfg, "caddy_hostname", "")).strip()
+        # Resolve pihole_host through Tailscale if it is a hostname.
+        resolver = build_resolver(config)
+        if args.pihole_host:
+            args.pihole_host = resolver.resolve(str(args.pihole_host))
+
+        caddy_host = str(get_config_value(globals_cfg, "caddy_host", "")).strip()
+        if not caddy_host:
+            # Legacy fallback for older configs.
+            caddy_host = str(get_config_value(globals_cfg, "caddy_hostname", "")).strip()
+
+        tailnet_domain = str(getattr(args, "tailnet", "") or "").strip()
 
         rendered = render_config(
             sheet_url=str(args.sheet_url),
             nodes_gid=int(args.nodes_gid),
             services_gid=int(getattr(args, "services_gid")),
             template_path=template_path,
-            caddy_hostname=caddy_hostname,
+            caddy_host=caddy_host,
+            tailnet_domain=tailnet_domain,
             trace_hostname=(str(args.trace_hostname) if args.trace_hostname else None),
             debug=bool(args.debug),
         )
