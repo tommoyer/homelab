@@ -2,10 +2,36 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import threading
 from typing import Any
 
 import pandas as pd
 
+_SHEET_DF_CACHE: dict[tuple[str, int], pd.DataFrame] = {}
+_SHEET_DF_CACHE_LOCK = threading.Lock()
+
+def get_sheet_df(sheet_url: str, gid: int, timeout_seconds: float, label: str) -> pd.DataFrame:
+    """Load a Google Sheet tab as a DataFrame, caching by (sheet_url, gid)."""
+    key = (sheet_url, int(gid))
+    with _SHEET_DF_CACHE_LOCK:
+        if key in _SHEET_DF_CACHE:
+            return _SHEET_DF_CACHE[key]
+    # Only import requests/io here to avoid circular import
+    import io
+
+    import requests
+    url = build_sheet_url(sheet_url, int(gid))
+    print(f"Loading {label} sheet data...", flush=True)
+    response = requests.get(url, timeout=timeout_seconds)
+    response.raise_for_status()
+    df = df_with_normalized_columns(pd.read_csv(io.StringIO(response.text)))
+    with _SHEET_DF_CACHE_LOCK:
+        _SHEET_DF_CACHE[key] = df
+    return df
+
+def clear_sheet_df_cache():
+    with _SHEET_DF_CACHE_LOCK:
+        _SHEET_DF_CACHE.clear()
 
 def build_sheet_url(sheet_url: str, gid: int) -> str:
     if "gid=0" not in sheet_url:

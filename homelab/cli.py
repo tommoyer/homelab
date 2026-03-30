@@ -5,7 +5,7 @@ import logging
 import sys
 from dataclasses import dataclass
 
-from . import caddyfile, deploy, dnscontrol, dnsmasq, mikrotik_prompt, pihole
+from . import caddyfile, deploy, dnscontrol, mikrotik_prompt, pihole, subnet_assign
 from .logging_utils import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -13,11 +13,11 @@ logger = logging.getLogger(__name__)
 COMMANDS: dict[str, tuple[str, object]] = {
     "run": ("Run multiple features", object()),
     "pihole": ("Generate/apply Pi-hole config", pihole),
-    "dnsmasq": ("Generate dnsmasq config from Services + Tailscale status", dnsmasq),
     "dnscontrol": ("Generate dnscontrol files for Cloudflare public DNS", dnscontrol),
     "mikrotik": ("Prompt-driven single-service MikroTik command generator", mikrotik_prompt),
     "caddy": ("Generate/deploy Caddyfile from Google Sheets", caddyfile),
     "deploy": ("Deploy a complete node/service", deploy),
+    "subnet_assign": ("Interactive subnet/IP assignment tool", subnet_assign),
 }
 
 
@@ -65,6 +65,7 @@ def _parse_global_options(argv: list[str]) -> tuple[bool, list[str]]:
 @dataclass(frozen=True)
 class _RunPlan:
     apply: bool
+    tailnet: str | None
     features: list[str]
 
 
@@ -81,7 +82,7 @@ def _build_run_parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help=(
-            "Forward --apply to apply-capable features (pihole, dnsmasq, caddy, dnscontrol). Without "
+            "Forward --apply to apply-capable features (pihole, caddy, dnscontrol). Without "
             "--apply, tools run in dry-run mode and print what "
             "would be done."
         ),
@@ -99,9 +100,12 @@ def _build_run_parser() -> argparse.ArgumentParser:
         help="Include Caddyfile generation/deploy",
     )
     parser.add_argument(
-        "--dnsmasq",
-        action="store_true",
-        help="Include dnsmasq address generation/deploy",
+        "--tailnet",
+        default=None,
+        help=(
+            "Override Tailscale tailnet domain for Pi-hole trusted CNAME targets "
+            "(forwarded to pihole --tailnet)"
+        ),
     )
     parser.add_argument(
         "--dnscontrol",
@@ -113,7 +117,6 @@ def _build_run_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-pihole", action="store_true", help="Exclude Pi-hole")
     parser.add_argument("--no-mikrotik", action="store_true", help="Exclude MikroTik prompt generator")
     parser.add_argument("--no-caddy", action="store_true", help="Exclude Caddy")
-    parser.add_argument("--no-dnsmasq", action="store_true", help="Exclude dnsmasq")
     parser.add_argument("--no-dnscontrol", action="store_true", help="Exclude dnscontrol")
 
     return parser
@@ -127,14 +130,12 @@ def _plan_run(argv: list[str]) -> _RunPlan:
         "pihole": bool(args.pihole),
         "mikrotik": bool(args.mikrotik),
         "caddy": bool(args.caddy),
-        "dnsmasq": bool(args.dnsmasq),
         "dnscontrol": bool(args.dnscontrol),
     }
     explicit_disables = {
         "pihole": bool(args.no_pihole),
         "mikrotik": bool(args.no_mikrotik),
         "caddy": bool(args.no_caddy),
-        "dnsmasq": bool(args.no_dnsmasq),
         "dnscontrol": bool(args.no_dnscontrol),
     }
 
@@ -156,14 +157,13 @@ def _plan_run(argv: list[str]) -> _RunPlan:
         for name in [
             "mikrotik",
             "pihole",
-            "dnsmasq",
             "caddy",
             "dnscontrol",
         ]
         if name in features
     ]
 
-    return _RunPlan(apply=bool(args.apply), features=ordered)
+    return _RunPlan(apply=bool(args.apply), tailnet=getattr(args, "tailnet", None), features=ordered)
 
 
 def _run_mode(argv: list[str], *, debug: bool) -> int:
@@ -183,6 +183,8 @@ def _run_mode(argv: list[str], *, debug: bool) -> int:
                 code = int(mikrotik_prompt.main(f_argv))
             elif feature == "pihole":
                 f_argv = ["--apply"] if plan.apply else []
+                if plan.tailnet:
+                    f_argv.extend(["--tailnet", plan.tailnet])
                 code = int(pihole.main(f_argv))
             elif feature == "caddy":
                 f_argv = []
@@ -191,13 +193,6 @@ def _run_mode(argv: list[str], *, debug: bool) -> int:
                 if plan.apply:
                     f_argv.append("--apply")
                 code = int(caddyfile.main(f_argv))
-            elif feature == "dnsmasq":
-                f_argv = []
-                if debug:
-                    f_argv.append("--debug")
-                if plan.apply:
-                    f_argv.append("--apply")
-                code = int(dnsmasq.main(f_argv))
             elif feature == "dnscontrol":
                 f_argv = []
                 if debug:
