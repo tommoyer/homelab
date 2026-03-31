@@ -22,6 +22,7 @@ from .config import (
 )
 from .resolver import HostResolver, build_resolver
 from .sheets import (
+    get_sheet_df,
     as_str,
     build_sheet_url,
     df_with_normalized_columns,

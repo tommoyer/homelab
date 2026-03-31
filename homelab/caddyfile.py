@@ -24,6 +24,7 @@ from .config import (
 from .logging_utils import configure_logging
 from .resolver import build_resolver
 from .sheets import (
+    get_sheet_df,
     as_str,
     build_sheet_url,
     df_with_normalized_columns,
