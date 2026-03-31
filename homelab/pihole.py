@@ -177,8 +177,8 @@ def render_config(
     logger.debug("pihole: services_url=%s", services_url)
 
     try:
-        nodes_df = get_sheet_df(nodes_url, cache_dir=None)
-        services_df = get_sheet_df(services_url, cache_dir=None)
+        nodes_df = get_sheet_df(sheet_url, int(nodes_gid), 30.0, "Nodes")
+        services_df = get_sheet_df(sheet_url, int(services_gid), 30.0, "Services")
     except Exception as exc:
         raise RuntimeError(f"error loading sheets: {exc}") from exc
 
