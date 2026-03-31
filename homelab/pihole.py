@@ -9,13 +9,18 @@ from pathlib import Path
 
 import pandas as pd
 
+from .cli_common import (
+    add_apply_argument,
+    add_sheet_arguments,
+    bootstrap_config_and_logging,
+    build_base_parser,
+)
 from .config import (
     DEFAULT_SHEET_URL,
     get_config_value,
     get_effective_table,
     get_table,
     load_toml_or_exit,
-    pre_parse_config,
     render_jinja_template,
     resolve_path_relative_to_config,
 )
@@ -51,58 +56,35 @@ def _toml_string_array(values: list[str]) -> str:
 
 
 def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
+    """Build argument parser for pihole tool using cli_common utilities."""
     repo_root = Path(__file__).resolve().parents[1]
     default_template_dir = repo_root / "templates" / "pihole"
     default_output_dir = repo_root / "generated" / "pihole"
-    config_path, config = pre_parse_config(argv)
-    logger.debug("pihole: config_path=%s", config_path)
-    globals_cfg = get_table(config, "globals")
-    tool_cfg = get_table(config, "pihole")
+    
+    config_path, config, globals_cfg, tool_cfg = bootstrap_config_and_logging(argv, "pihole")
     tailscale_cfg = get_effective_table(config, "tailscale", legacy_root_fallback=False)
 
-    parser = argparse.ArgumentParser(
+    parser = build_base_parser(
         description=(
             "Generate Pi-hole v6 TOML config from Google Sheets by rendering a Jinja2 template. "
             "Populates dns.hosts from the Nodes tab and dns.cnameRecords from the Services tab "
             "(and optional Nodes CNAMEs)."
-        )
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=config_path,
-        help="Path to TOML config file containing default parameters",
-    )
-    parser.add_argument(
-        "--sheet-url",
-        default=get_config_value(
-            globals_cfg,
-            "sheet_url",
-            DEFAULT_SHEET_URL,
         ),
-        help="Google Sheets CSV export URL containing 'gid=0' that will be replaced with the Nodes/Services GIDs.",
-    )
-    parser.add_argument(
-        "--nodes-gid",
-        type=int,
-        default=int(get_config_value(globals_cfg, "nodes_gid", 344016240)),
-        help="GID for Nodes sheet",
-    )
-    parser.add_argument(
-        "--services-gid",
-        type=int,
-        default=int(get_config_value(globals_cfg, "services_gid", get_config_value(globals_cfg, "dns_gid", 0))),
-        help="GID for Services sheet (used to generate CNAME records)",
-    )
-    # Backward-compatible alias for older configs/flags.
-    parser.add_argument(
-        "--dns-gid",
-        dest="services_gid",
-        type=int,
-        default=argparse.SUPPRESS,
-        help=argparse.SUPPRESS,
+        config_path=config_path,
+        globals_cfg=globals_cfg,
+        tool_cfg=tool_cfg,
     )
 
+    # Add standard sheet arguments
+    add_sheet_arguments(
+        parser,
+        globals_cfg,
+        nodes_gid=344016240,
+        services_gid=0,
+        dns_gid=0,
+    )
+
+    # Tool-specific arguments
     parser.add_argument(
         "--template",
         type=Path,
@@ -157,17 +139,9 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
         ),
     )
 
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        default=bool(get_config_value(tool_cfg, "debug", False)),
-        help="Print generation debug output for all hostnames/aliases",
-    )
-
-    parser.add_argument(
-        "--apply",
-        action="store_true",
-        help=(
+    add_apply_argument(
+        parser,
+        help_text=(
             "If set, scp the rendered config to /etc/pihole/pihole.toml on the Pi-hole instance "
             "and run 'pihole reloaddns' via ssh."
         ),
