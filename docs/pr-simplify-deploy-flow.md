@@ -151,3 +151,66 @@ if run_ansible:
 ---
 
 **Impact**: Simplifies deployment logic, removes `Deployment Type` dependency, adds support for custom playbooks
+
+## Additional Fixes (Latest Commit)
+
+### 1. Script URL + Proxmox Node Validation
+
+Added validation to prevent deployment failures:
+
+```python
+if run_helper:
+    proxmox_node = as_str(row.get("proxmox_node", "")).strip()
+    if not proxmox_node:
+        logger.error("Script URL is set but Proxmox Node is blank...")
+        return 1
+```
+
+**Behavior**: If `Script URL` is set but `Proxmox Node` is blank, deployment errors immediately with a clear message.
+
+### 2. Interactive Node Selection Menu
+
+Made the `hostname` argument optional. When omitted, displays an interactive menu:
+
+```bash
+$ python -m deploy
+
+============================================================
+  Select Node to Deploy
+============================================================
+
+  1. pve-node1         [Helper]
+  2. docker-host       [Ansible]
+  3. k8s-master        [Helper + Ansible]
+  4. pihole            [Ansible]
+
+============================================================
+Enter number (or 'q' to quit): _
+```
+
+**Implementation**:
+- Added `_select_deployable_node()` function
+- Filters nodes where `Managed=true` OR `Script URL` is set
+- Displays deployment type label for each node
+- Supports keyboard shortcuts: number to select, 'q' to quit, Ctrl+C to cancel
+
+**Usage**:
+```bash
+# Interactive menu
+python -m deploy
+
+# Direct (original behavior)
+python -m deploy myhost
+```
+
+### Updated Testing Checklist
+
+- [x] Syntax validation
+- [x] Hostname argument is optional
+- [x] Menu function exists and is called
+- [x] Proxmox Node validation added
+- [ ] Manual: Test interactive menu with multiple nodes
+- [ ] Manual: Test menu with only one deployable node
+- [ ] Manual: Test menu with no deployable nodes
+- [ ] Manual: Test validation: Script URL but no Proxmox Node
+- [ ] Manual: Original behavior (hostname provided) still works
