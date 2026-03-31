@@ -79,7 +79,7 @@ def _load_external_zones_from_sheet(
 ) -> list[str]:
     """Fetch the Zones tab and return zones where DNS Views includes 'external'."""
     url = build_sheet_url(sheet_url, zones_gid)
-    zones_df = get_sheet_df(url, cache_dir=None)
+    zones_df = get_sheet_df(sheet_url, int(zones_gid), 30.0, "Zones")
 
     external_zones: list[str] = []
     for idx, row in zones_df.iterrows():
@@ -401,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
     services_url = build_sheet_url(str(args.sheet_url), int(args.services_gid))
 
     try:
-        services_df = get_sheet_df(services_url, cache_dir=None)
+        services_df = get_sheet_df(args.sheet_url, int(args.services_gid), 30.0, "Services")
         services_df = df_with_normalized_columns(services_df)
     except Exception as exc:
         print(f"Error: failed to load services sheet: {exc}", file=sys.stderr)

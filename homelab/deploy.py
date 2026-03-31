@@ -22,6 +22,7 @@ from .config import (
 )
 from .resolver import HostResolver, build_resolver
 from .sheets import (
+    get_sheet_df,
     as_str,
     build_sheet_url,
     df_with_normalized_columns,
@@ -733,7 +734,7 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
 
     nodes_url = build_sheet_url(sheet_url, int(nodes_gid))
     try:
-        nodes_df = get_sheet_df(nodes_url, cache_dir=None, debug=False)
+        nodes_df = get_sheet_df(sheet_url, int(nodes_gid), 30.0, "Nodes")
     except Exception as exc:
         logger.error("Error loading Nodes sheet CSV: %s", exc)
         return 1
