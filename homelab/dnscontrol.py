@@ -19,7 +19,7 @@ from .config import (
     pre_parse_config,
     resolve_path_relative_to_config,
 )
-from .sheets import as_str, build_sheet_url, df_with_normalized_columns
+from .sheets import as_str, build_sheet_url, df_with_normalized_columns, get_sheet_df
 from .ssh import require_command
 
 logger = logging.getLogger(__name__)
@@ -79,8 +79,7 @@ def _load_external_zones_from_sheet(
 ) -> list[str]:
     """Fetch the Zones tab and return zones where DNS Views includes 'external'."""
     url = build_sheet_url(sheet_url, zones_gid)
-    zones_df = pd.read_csv(url)
-    zones_df = df_with_normalized_columns(zones_df)
+    zones_df = get_sheet_df(url, cache_dir=None)
 
     external_zones: list[str] = []
     for idx, row in zones_df.iterrows():
@@ -402,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
     services_url = build_sheet_url(str(args.sheet_url), int(args.services_gid))
 
     try:
-        services_df = pd.read_csv(services_url)
+        services_df = get_sheet_df(services_url, cache_dir=None)
         services_df = df_with_normalized_columns(services_df)
     except Exception as exc:
         print(f"Error: failed to load services sheet: {exc}", file=sys.stderr)

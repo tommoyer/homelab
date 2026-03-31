@@ -20,7 +20,7 @@ from .config import (
     resolve_path_relative_to_config,
 )
 from .resolver import build_resolver
-from .sheets import as_str, build_sheet_url, df_with_normalized_columns, parse_bool
+from .sheets import as_str, build_sheet_url, df_with_normalized_columns, get_sheet_df, parse_bool
 from .ssh import (
     require_command,
     scp_base_args,
@@ -203,8 +203,8 @@ def render_config(
     logger.debug("pihole: services_url=%s", services_url)
 
     try:
-        nodes_df = pd.read_csv(nodes_url)
-        services_df = pd.read_csv(services_url)
+        nodes_df = get_sheet_df(nodes_url, cache_dir=None)
+        services_df = get_sheet_df(services_url, cache_dir=None)
     except Exception as exc:
         raise RuntimeError(f"error loading sheets: {exc}") from exc
 
