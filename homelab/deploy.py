@@ -733,7 +733,7 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
 
     nodes_url = build_sheet_url(sheet_url, int(nodes_gid))
     try:
-        nodes_df = pd.read_csv(nodes_url)
+        nodes_df = get_sheet_df(nodes_url, cache_dir=None, debug=False)
     except Exception as exc:
         logger.error("Error loading Nodes sheet CSV: %s", exc)
         return 1

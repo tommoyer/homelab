@@ -543,13 +543,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.debug:
         logger.debug("caddy: loading Services sheet CSV: %s", caddy_url)
 
-    try:
-        services_df = pd.read_csv(caddy_url)
-    except Exception as exc:
-        print(f"Error: failed to read Caddy sheet CSV: {exc}", file=sys.stderr)
-        return 1
-
-    services_df = df_with_normalized_columns(services_df)
+    services_df = get_sheet_df(caddy_url, cache_dir=None, debug=args.debug)
 
     nodes_lookup: dict[str, str] | None = None
     if args.nodes_gid is not None:
@@ -557,7 +551,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.debug:
             logger.debug("caddy: loading Nodes sheet CSV: %s", nodes_url)
         try:
-            nodes_df = pd.read_csv(nodes_url)
+            nodes_df = get_sheet_df(nodes_url, cache_dir=None, debug=args.debug)
             nodes_lookup = load_nodes_lookup(nodes_df)
         except Exception as exc:
             print(f"Error: failed to read Nodes sheet CSV: {exc}", file=sys.stderr)
