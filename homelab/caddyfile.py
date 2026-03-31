@@ -24,6 +24,7 @@ from .config import (
 from .logging_utils import configure_logging
 from .resolver import build_resolver
 from .sheets import (
+    get_sheet_df,
     as_str,
     build_sheet_url,
     df_with_normalized_columns,
@@ -543,7 +544,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.debug:
         logger.debug("caddy: loading Services sheet CSV: %s", caddy_url)
 
-    services_df = get_sheet_df(caddy_url, cache_dir=None, debug=args.debug)
+    services_df = get_sheet_df(args.sheet_url, int(args.caddy_gid), 30.0, "Caddy Services")
 
     nodes_lookup: dict[str, str] | None = None
     if args.nodes_gid is not None:
@@ -551,7 +552,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.debug:
             logger.debug("caddy: loading Nodes sheet CSV: %s", nodes_url)
         try:
-            nodes_df = get_sheet_df(nodes_url, cache_dir=None, debug=args.debug)
+            nodes_df = get_sheet_df(args.sheet_url, int(args.nodes_gid), 30.0, "Nodes")
             nodes_lookup = load_nodes_lookup(nodes_df)
         except Exception as exc:
             print(f"Error: failed to read Nodes sheet CSV: {exc}", file=sys.stderr)
