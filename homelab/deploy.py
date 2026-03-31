@@ -140,10 +140,92 @@ def _parse_playbooks_value(value: object) -> list[str]:
     return [p.strip() for p in playbooks_str.split(",") if p.strip()]
 
 
+
+def _select_deployable_node(nodes_df: pd.DataFrame) -> str | None:
+    """
+    Present an interactive menu of deployable nodes.
+    
+    A node is deployable if:
+    - Managed is true, OR
+    - Script URL is set
+    
+    Returns:
+        Selected hostname, or None if user cancels
+    """
+    df_norm = df_with_normalized_columns(nodes_df)
+    
+    # Find deployable nodes
+    deployable = []
+    for _, row in df_norm.iterrows():
+        hostname = as_str(row.get("hostname", "")).strip()
+        if not hostname:
+            continue
+            
+        managed = as_str(row.get("managed", "")).lower() in {"true", "yes", "1"}
+        script_url = as_str(row.get("script_url", "")).strip()
+        
+        if managed or script_url:
+            # Build deployment type label
+            parts = []
+            if script_url:
+                parts.append("Helper")
+            if managed:
+                parts.append("Ansible")
+            deploy_type = " + ".join(parts)
+            
+            deployable.append({
+                "hostname": hostname,
+                "deploy_type": deploy_type,
+                "managed": managed,
+                "script_url": bool(script_url),
+            })
+    
+    if not deployable:
+        print("No deployable nodes found (need Managed=true or Script URL set).", file=sys.stderr)
+        return None
+    
+    # Sort by hostname
+    deployable.sort(key=lambda x: x["hostname"])
+    
+    # Display menu
+    print()
+    print("=" * 60)
+    print("  Select Node to Deploy")
+    print("=" * 60)
+    print()
+    
+    for idx, node in enumerate(deployable, 1):
+        print(f"  {idx}. {node['hostname'].ljust(20)} [{node['deploy_type']}]")
+    
+    print()
+    print("=" * 60)
+    
+    # Get user selection
+    while True:
+        try:
+            choice = input("Enter number (or 'q' to quit): ").strip().lower()
+            if choice in ('q', 'quit', 'exit'):
+                return None
+            
+            idx = int(choice)
+            if 1 <= idx <= len(deployable):
+                return deployable[idx - 1]["hostname"]
+            else:
+                print(f"Invalid choice. Enter 1-{len(deployable)}", file=sys.stderr)
+        except ValueError:
+            print("Invalid input. Enter a number or 'q' to quit.", file=sys.stderr)
+        except (KeyboardInterrupt, EOFError):
+            print()
+            print("Cancelled.", file=sys.stderr)
+            return None
+
+
 def _add_parser_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "hostname",
-        help="Hostname of the new node to deploy",
+        nargs="?",
+        default=None,
+        help="Hostname of the new node to deploy (if omitted, displays interactive menu)",
     )
     # Global overrides
     parser.add_argument(
@@ -764,9 +846,7 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
         parser = _build_parser()
         args = parser.parse_args(argv)
 
-    logger.info("Starting deployment for node: %s", args.hostname)
-
-    # Config loading
+    # Config loading - need this before we can load nodes for menu
     config_path: Path = args.config.expanduser().resolve()
     config_dict = load_toml_or_exit(config_path)
     settings = get_effective_table(config_dict, "deploy", inherit=("globals",))
@@ -791,6 +871,17 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
         return 1
 
     nodes_lookup = load_nodes_lookup(nodes_df)
+    
+    # If hostname not provided, show interactive menu
+    if args.hostname is None:
+        selected = _select_deployable_node(nodes_df)
+        if selected is None:
+            logger.info("No node selected. Exiting.")
+            return 0
+        args.hostname = selected
+        logger.info("Selected node: %s", args.hostname)
+    
+    logger.info("Starting deployment for node: %s", args.hostname)
 
     # Build Tailscale-aware resolver and stash it inside nodes_lookup so that
     # _resolve_node_shortname_to_ip (which is threaded deeply through the
@@ -831,6 +922,13 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
     
     # Phase 1: Run Proxmox Helper Script if Script URL is set
     if run_helper:
+        # Validate that Proxmox Node is set
+        proxmox_node = as_str(row.get("proxmox_node", "")).strip()
+        if not proxmox_node:
+            logger.error("Script URL is set but Proxmox Node is blank for '%s'. Cannot deploy.", args.hostname)
+            logger.error("Please set the 'Proxmox Node' column in the Nodes sheet.")
+            return 1
+        
         logger.info("Script URL detected: '%s' - Running Proxmox Helper Script", script_url)
         success = run_proxmox_helper_script(
             node_cfg=node_cfg,
