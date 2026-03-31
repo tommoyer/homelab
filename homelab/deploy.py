@@ -8,6 +8,7 @@ import re
 import shlex
 import subprocess
 import sys
+import curses
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -143,7 +144,7 @@ def _parse_playbooks_value(value: object) -> list[str]:
 
 def _select_deployable_node(nodes_df: pd.DataFrame) -> str | None:
     """
-    Present an interactive menu of deployable nodes.
+    Present an interactive curses menu of deployable nodes.
     
     A node is deployable if:
     - Managed is true, OR
@@ -176,8 +177,6 @@ def _select_deployable_node(nodes_df: pd.DataFrame) -> str | None:
             deployable.append({
                 "hostname": hostname,
                 "deploy_type": deploy_type,
-                "managed": managed,
-                "script_url": bool(script_url),
             })
     
     if not deployable:
@@ -187,37 +186,54 @@ def _select_deployable_node(nodes_df: pd.DataFrame) -> str | None:
     # Sort by hostname
     deployable.sort(key=lambda x: x["hostname"])
     
-    # Display menu
-    print()
-    print("=" * 60)
-    print("  Select Node to Deploy")
-    print("=" * 60)
-    print()
-    
-    for idx, node in enumerate(deployable, 1):
-        print(f"  {idx}. {node['hostname'].ljust(20)} [{node['deploy_type']}]")
-    
-    print()
-    print("=" * 60)
-    
-    # Get user selection
-    while True:
-        try:
-            choice = input("Enter number (or 'q' to quit): ").strip().lower()
-            if choice in ('q', 'quit', 'exit'):
+    # Use curses for menu
+    def _curses_menu(stdscr: "curses._CursesWindow") -> str | None:  # type: ignore[name-defined]
+        """Display curses menu and return selected hostname."""
+        curses.curs_set(0)
+        selected = 0
+        
+        while True:
+            stdscr.clear()
+            height, width = stdscr.getmaxyx()
+            
+            # Header
+            stdscr.addstr(0, 0, "=" * min(width - 1, 80))
+            stdscr.addstr(1, 0, "  SELECT NODE TO DEPLOY")
+            stdscr.addstr(2, 0, "=" * min(width - 1, 80))
+            stdscr.addstr(3, 0, "Use ↑/↓ to select, Enter to deploy, q to quit")
+            stdscr.addstr(4, 0, "-" * min(width - 1, 80))
+            
+            # Menu items
+            for idx, node in enumerate(deployable):
+                prefix = "▶" if idx == selected else " "
+                label = f"{prefix} {node['hostname'].ljust(20)} [{node['deploy_type']}]"
+                y_pos = 6 + idx
+                if y_pos < height - 1:
+                    try:
+                        stdscr.addstr(y_pos, 0, label[: width - 1])
+                    except curses.error:
+                        pass  # Ignore if we run out of screen space
+            
+            # Get input
+            try:
+                ch = stdscr.getch()
+            except KeyboardInterrupt:
                 return None
             
-            idx = int(choice)
-            if 1 <= idx <= len(deployable):
-                return deployable[idx - 1]["hostname"]
-            else:
-                print(f"Invalid choice. Enter 1-{len(deployable)}", file=sys.stderr)
-        except ValueError:
-            print("Invalid input. Enter a number or 'q' to quit.", file=sys.stderr)
-        except (KeyboardInterrupt, EOFError):
-            print()
-            print("Cancelled.", file=sys.stderr)
-            return None
+            if ch in (ord("q"), ord("Q"), 27):  # q, Q, or ESC
+                return None
+            elif ch == curses.KEY_UP:
+                selected = (selected - 1) % len(deployable)
+            elif ch == curses.KEY_DOWN:
+                selected = (selected + 1) % len(deployable)
+            elif ch in (10, 13, curses.KEY_ENTER):  # Enter
+                return deployable[selected]["hostname"]
+    
+    try:
+        return curses.wrapper(_curses_menu)
+    except KeyboardInterrupt:
+        return None
+
 
 
 def _add_parser_arguments(parser: argparse.ArgumentParser) -> None:
@@ -760,7 +776,8 @@ def run_proxmox_helper_script(
         full_script_url = script_url
 
     apply = bool(effective_settings.get("apply", False))
-    render_dir: Path | None = effective_settings.get("render_dir")
+    render_dir_raw = effective_settings.get("render_dir")
+    render_dir: Path | None = Path(render_dir_raw) if render_dir_raw else None
 
     try:
         ssh_port, identity_file, env, use_sshpass, ssh_user, ssh_host = _build_ssh_scp_env_and_user(
