@@ -33,15 +33,26 @@ from .ssh import prefix_sshpass, require_command, sshpass_env_from_password_env
 logger = logging.getLogger(__name__)
 
 
-def run_ansible_playbooks(hostname: str, config_path: Path) -> bool:
+def run_ansible_playbooks(hostname: str, config_path: Path, extra_playbooks: list[str] | None = None) -> bool:
     """
-    Run bootstrap.yaml and hardening.yaml for the given hostname using the dynamic inventory.
-    Returns True if both playbooks succeed, False otherwise.
+    Run bootstrap.yaml, hardening.yaml, and any additional playbooks for the given hostname.
+    
+    Args:
+        hostname: Target hostname to limit ansible execution
+        config_path: Path to config file (for environment setup)
+        extra_playbooks: Optional list of additional playbook names to run after bootstrap and hardening
+        
+    Returns:
+        True if all playbooks succeed, False otherwise
     """
     repo_root = Path(__file__).resolve().parents[1]
     ansible_dir = repo_root / "ansible"
     inventory_script = ansible_dir / "inventory" / "inventory-spreadsheet.py"
     playbooks = ["bootstrap.yaml", "hardening.yaml"]
+    
+    # Append extra playbooks if provided
+    if extra_playbooks:
+        playbooks.extend(extra_playbooks)
     env = os.environ.copy()
     env["ANSIBLE_CONFIG"] = str(ansible_dir / "ansible.cfg")
     success = True
@@ -99,6 +110,34 @@ def _normalize_int_like_string(value: object) -> str:
     if m:
         return m.group(1)
     return cleaned
+
+
+
+def _parse_playbooks_value(value: object) -> list[str]:
+    """
+    Parse a comma-separated Playbooks cell into a list of playbook names.
+    
+    Args:
+        value: Raw value from Nodes sheet Playbooks column
+        
+    Returns:
+        List of playbook names (stripped, non-empty)
+        
+    Example:
+        "app.yaml, monitoring.yaml" -> ["app.yaml", "monitoring.yaml"]
+        "" -> []
+        None -> []
+    """
+    import pandas as pd
+    
+    if not value or (isinstance(value, float) and pd.isna(value)):
+        return []
+    
+    playbooks_str = str(value).strip()
+    if not playbooks_str:
+        return []
+    
+    return [p.strip() for p in playbooks_str.split(",") if p.strip()]
 
 
 def _add_parser_arguments(parser: argparse.ArgumentParser) -> None:
@@ -703,6 +742,19 @@ def run_proxmox_helper_script(
 
 
 def main(argv: list[str] | argparse.Namespace | None = None) -> int:
+    """
+    Deploy a homelab node using either Proxmox Helper Scripts, Ansible, or both.
+    
+    Deployment flow is determined by two Nodes sheet columns:
+    - Script URL: If set, run the Proxmox Helper Script
+    - Managed: If true, run Ansible (bootstrap + hardening + extra playbooks from Playbooks column)
+    
+    Examples:
+    - Script URL only -> helper script only
+    - Managed=true only -> bootstrap + hardening + extra playbooks
+    - Both set -> helper script first, then ansible
+    - Neither set -> no-op (skip deployment)
+    """
     if argv is None:
         argv = sys.argv[1:]
 
@@ -712,7 +764,7 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
         parser = _build_parser()
         args = parser.parse_args(argv)
 
-    logger.info("Starting helper script deploy for node: %s", args.hostname)
+    logger.info("Starting deployment for node: %s", args.hostname)
 
     # Config loading
     config_path: Path = args.config.expanduser().resolve()
@@ -732,7 +784,6 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
         logger.error("Missing sheet_url or nodes_gid in config")
         return 1
 
-    nodes_url = build_sheet_url(sheet_url, int(nodes_gid))
     try:
         nodes_df = get_sheet_df(sheet_url, int(nodes_gid), 30.0, "Nodes")
     except Exception as exc:
@@ -759,34 +810,28 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
     if isinstance(node_cfg.get("node"), dict):
         node_cfg["node"]["bridge"] = bridge
 
-    # Extract deployment type and managed flag
+    # Extract deployment fields from Nodes sheet
     row = nodes_df[df_with_normalized_columns(nodes_df)["hostname"].astype(str).str.strip().str.lower() == args.hostname.strip().lower()].iloc[0]
     logger.debug("Node config row for hostname '%s': %s", args.hostname, row.to_dict())
-    deployment_type = as_str(row.get("deployment_type")).lower()
-    managed = as_str(row.get("managed")).lower() in {"true", "yes", "1"}
+    
+    script_url = as_str(node_cfg.get("script_url", "")).strip()
+    managed = as_str(row.get("managed", "")).lower() in {"true", "yes", "1"}
+    playbooks_value = row.get("playbooks", "")
+    
+    logger.debug("Deployment config: script_url='%s', managed=%s, playbooks='%s'", 
+                 script_url, managed, playbooks_value)
 
-    logger.debug("Deployment type: %s, Managed: %s", deployment_type, managed)
-
-    # Scenario 1: Proxmox helper script only
-    if deployment_type == "helper-script" and not managed:
-        if not node_cfg.get("script_url"):
-            logger.error("Missing Script URL for %s in Nodes sheet.", args.hostname)
-            return 1
-        logger.info("Script URL detected - Running Proxmox Helper Script.")
-        success = run_proxmox_helper_script(
-            node_cfg=node_cfg,
-            settings=settings,
-            config_path=config_path,
-            nodes_lookup=nodes_lookup,
-        )
-        return 0 if success else 1
-
-    # Scenario 2: Proxmox helper script + ansible playbook
-    if deployment_type == "helper-script" and managed:
-        if not node_cfg.get("script_url"):
-            logger.error("Missing Script URL for %s in Nodes sheet.", args.hostname)
-            return 1
-        logger.info("Script URL detected - Running Proxmox Helper Script.")
+    # Determine what to run
+    run_helper = bool(script_url)
+    run_ansible = managed
+    
+    if not run_helper and not run_ansible:
+        logger.info("Node '%s' has no Script URL and Managed=false. Skipping deployment.", args.hostname)
+        return 0
+    
+    # Phase 1: Run Proxmox Helper Script if Script URL is set
+    if run_helper:
+        logger.info("Script URL detected: '%s' - Running Proxmox Helper Script", script_url)
         success = run_proxmox_helper_script(
             node_cfg=node_cfg,
             settings=settings,
@@ -794,17 +839,27 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
             nodes_lookup=nodes_lookup,
         )
         if not success:
+            logger.error("Proxmox Helper Script failed for %s", args.hostname)
             return 1
-        logger.info("Running Ansible playbooks for managed node: %s", args.hostname)
-        ansible_success = run_ansible_playbooks(args.hostname, config_path)
-        return 0 if ansible_success else 1
-
-    # Scenario 3: Ansible playbook only
-    if deployment_type == "ansible" and managed:
-        logger.info("Running Ansible playbooks for managed node: %s", args.hostname)
-        ansible_success = run_ansible_playbooks(args.hostname, config_path)
-        return 0 if ansible_success else 1
-
-    # Unhandled scenario
-    logger.warning(f"Unhandled deployment scenario for node '{args.hostname}': deployment_type='{deployment_type}', managed='{managed}'. Skipping.")
+        logger.info("Proxmox Helper Script completed successfully")
+    
+    # Phase 2: Run Ansible if Managed is true
+    if run_ansible:
+        # Parse extra playbooks from Playbooks column
+        extra_playbooks = _parse_playbooks_value(playbooks_value)
+        
+        if extra_playbooks:
+            logger.info("Running Ansible for managed node '%s' with extra playbooks: %s", 
+                       args.hostname, extra_playbooks)
+        else:
+            logger.info("Running Ansible for managed node '%s' (bootstrap + hardening only)", 
+                       args.hostname)
+        
+        ansible_success = run_ansible_playbooks(args.hostname, config_path, extra_playbooks)
+        if not ansible_success:
+            logger.error("Ansible playbooks failed for %s", args.hostname)
+            return 1
+        logger.info("Ansible playbooks completed successfully")
+    
+    logger.info("Deployment completed successfully for %s", args.hostname)
     return 0
