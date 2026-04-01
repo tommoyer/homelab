@@ -9,6 +9,13 @@ from typing import Any, Callable
 from .commands import COMMANDS
 
 
+@dataclass
+class GlobalFlags:
+    """Global flags that apply to all commands."""
+    debug: bool = False
+    apply: bool = False
+
+
 @dataclass(frozen=True)
 class MenuEntry:
     name: str
@@ -127,11 +134,15 @@ def _build_menu_entries() -> list[MenuEntry]:
 
 def _main_menu(
     stdscr: "curses._CursesWindow",  # type: ignore[name-defined]
-    entries: list[MenuEntry]
+    entries: list[MenuEntry],
+    global_flags: GlobalFlags
 ) -> MenuEntry | None:
-    """Display main command selection menu."""
+    """Display main command selection menu with global flags."""
     curses.curs_set(0)
-    selected = 0
+    
+    # 0 = debug flag, 1 = apply flag, 2+ = commands
+    num_global_items = 2
+    selected = num_global_items  # Start on first command by default
 
     while True:
         stdscr.clear()
@@ -140,25 +151,56 @@ def _main_menu(
         stdscr.addstr(0, 0, "═" * min(width - 1, 80))
         stdscr.addstr(1, 0, "  HOMELAB TOOLS MENU")
         stdscr.addstr(2, 0, "═" * min(width - 1, 80))
-        stdscr.addstr(3, 0, "Use ↑/↓ to select, Enter to configure/run, q to quit")
+        stdscr.addstr(3, 0, "Use ↑/↓ to select, Space to toggle flags, Enter to run, q to quit")
         stdscr.addstr(4, 0, "─" * min(width - 1, 80))
+        
+        # Global flags section
+        y = 6
+        stdscr.addstr(y, 0, "Global Flags:")
+        y += 1
+        
+        # Debug flag
+        prefix = "▶" if selected == 0 else " "
+        debug_toggle = "[×]" if global_flags.debug else "[ ]"
+        stdscr.addstr(y, 0, f"{prefix} {debug_toggle} --debug         Enable verbose debug logging")
+        y += 1
+        
+        # Apply flag
+        prefix = "▶" if selected == 1 else " "
+        apply_toggle = "[×]" if global_flags.apply else "[ ]"
+        stdscr.addstr(y, 0, f"{prefix} {apply_toggle} --apply         Apply changes (deploy, pihole, caddy, dnscontrol)")
+        y += 1
+        
+        stdscr.addstr(y, 0, "─" * min(width - 1, 80))
+        y += 1
+        stdscr.addstr(y, 0, "Commands:")
+        y += 1
 
+        # Command list
         for idx, entry in enumerate(entries):
-            prefix = "▶" if idx == selected else " "
+            cmd_selected = selected - num_global_items
+            prefix = "▶" if idx == cmd_selected else " "
             label = f"{prefix} {entry.name.ljust(16)}  {entry.description}"
-            y_pos = 6 + idx
-            if y_pos < height - 1:
-                stdscr.addstr(y_pos, 0, label[: width - 1])
+            if y < height - 1:
+                stdscr.addstr(y, 0, label[: width - 1])
+            y += 1
 
         ch = stdscr.getch()
         if ch in (ord("q"), ord("Q"), 27):  # q, Q, or ESC
             return None
         if ch == curses.KEY_UP:
-            selected = (selected - 1) % len(entries)
+            selected = (selected - 1) % (len(entries) + num_global_items)
         elif ch == curses.KEY_DOWN:
-            selected = (selected + 1) % len(entries)
+            selected = (selected + 1) % (len(entries) + num_global_items)
+        elif ch == ord(" "):  # Space to toggle global flags
+            if selected == 0:  # Debug flag
+                global_flags.debug = not global_flags.debug
+            elif selected == 1:  # Apply flag
+                global_flags.apply = not global_flags.apply
         elif ch in (10, 13, curses.KEY_ENTER):  # Enter
-            return entries[selected]
+            if selected >= num_global_items:
+                # Selected a command
+                return entries[selected - num_global_items]
 
 
 def _config_menu(
@@ -277,9 +319,12 @@ def main(argv: list[str] | None = None) -> int:
         print("Error: no homelab commands are available for the TUI menu.", file=sys.stderr)
         return 1
 
+    # Global flags persist across menu iterations
+    global_flags = GlobalFlags()
+
     # Main loop: select command -> configure -> run -> back to menu
     while True:
-        selected_entry = curses.wrapper(lambda stdscr: _main_menu(stdscr, entries))
+        selected_entry = curses.wrapper(lambda stdscr: _main_menu(stdscr, entries, global_flags))
         if selected_entry is None:
             # User quit
             return 0
@@ -303,6 +348,15 @@ def main(argv: list[str] | None = None) -> int:
         # Build argv and run the command
         command_argv = _build_argv_from_config(config)
         
+        # Add global flags if not already present in command-specific flags
+        if global_flags.debug and "--debug" not in command_argv:
+            if selected_entry.name in {"caddy", "mikrotik", "deploy", "pihole", "dnscontrol"}:
+                command_argv.insert(0, "--debug")
+        
+        if global_flags.apply and "--apply" not in command_argv:
+            if selected_entry.name in {"deploy", "pihole", "caddy", "dnscontrol"}:
+                command_argv.insert(0, "--apply")
+        
         print(f"\n{'═' * 60}")
         print(f"Running: {selected_entry.name} {' '.join(command_argv)}")
         print(f"{'═' * 60}\n")
@@ -320,4 +374,9 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 1
         
         # Wait for user before returning to menu
-        input("\nPress Enter to return to menu...")
+        try:
+            input("\nPress Enter to return to menu...")
+        except (KeyboardInterrupt, EOFError):
+            # User pressed Ctrl+C or Ctrl+D, just return to menu
+            print()  # New line for cleaner output
+            pass

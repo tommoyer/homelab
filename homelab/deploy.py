@@ -262,6 +262,12 @@ def _add_parser_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging to see detailed execution information",
+    )
+
+    parser.add_argument(
         "--render-dir",
         type=Path,
         default=None,
@@ -898,6 +904,12 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
         args.hostname = selected
         logger.info("Selected node: %s", args.hostname)
     
+    # Configure logging level based on --debug flag
+    if getattr(args, "debug", False):
+        logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
+        logger.setLevel(logging.DEBUG)
+        logger.debug("Debug logging enabled")
+    
     logger.info("Starting deployment for node: %s", args.hostname)
 
     # Build Tailscale-aware resolver and stash it inside nodes_lookup so that
@@ -908,6 +920,8 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
         
     try:
         node_cfg = get_node_config(nodes_df, args.hostname)
+        logger.debug("node_cfg keys: %s", list(node_cfg.keys()))
+        logger.debug("node_cfg['script_url']: %s", node_cfg.get("script_url"))
     except ValueError as e:
         logger.error(str(e))
         return 1
@@ -928,6 +942,8 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
     
     logger.debug("Deployment config: script_url='%s', managed=%s, playbooks='%s'", 
                  script_url, managed, playbooks_value)
+    logger.info("Deployment plan for '%s': run_helper=%s, run_ansible=%s", 
+                args.hostname, bool(script_url), managed)
 
     # Determine what to run
     run_helper = bool(script_url)
@@ -946,7 +962,11 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
             logger.error("Please set the 'Proxmox Node' column in the Nodes sheet.")
             return 1
         
-        logger.info("Script URL detected: '%s' - Running Proxmox Helper Script", script_url)
+        logger.info("=" * 60)
+        logger.info("PHASE 1: Running Proxmox Helper Script")
+        logger.info("Script URL: %s", script_url)
+        logger.info("Proxmox Node: %s", proxmox_node)
+        logger.info("=" * 60)
         success = run_proxmox_helper_script(
             node_cfg=node_cfg,
             settings=settings,
@@ -956,25 +976,32 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
         if not success:
             logger.error("Proxmox Helper Script failed for %s", args.hostname)
             return 1
-        logger.info("Proxmox Helper Script completed successfully")
+        logger.info("=" * 60)
+        logger.info("PHASE 1: Proxmox Helper Script completed successfully")
+        logger.info("=" * 60)
     
     # Phase 2: Run Ansible if Managed is true
     if run_ansible:
+        logger.info("=" * 60)
+        logger.info("PHASE 2: Running Ansible Playbooks")
+        logger.info("Node: %s", args.hostname)
+        logger.info("=" * 60)
+        
         # Parse extra playbooks from Playbooks column
         extra_playbooks = _parse_playbooks_value(playbooks_value)
         
         if extra_playbooks:
-            logger.info("Running Ansible for managed node '%s' with extra playbooks: %s", 
-                       args.hostname, extra_playbooks)
+            logger.info("Playbooks: bootstrap + hardening + %s", extra_playbooks)
         else:
-            logger.info("Running Ansible for managed node '%s' (bootstrap + hardening only)", 
-                       args.hostname)
+            logger.info("Playbooks: bootstrap + hardening only")
         
         ansible_success = run_ansible_playbooks(args.hostname, config_path, extra_playbooks)
         if not ansible_success:
             logger.error("Ansible playbooks failed for %s", args.hostname)
             return 1
-        logger.info("Ansible playbooks completed successfully")
+        logger.info("=" * 60)
+        logger.info("PHASE 2: Ansible playbooks completed successfully")
+        logger.info("=" * 60)
     
     logger.info("Deployment completed successfully for %s", args.hostname)
     return 0
