@@ -23,6 +23,7 @@ def _print_help() -> None:
     print("Unified CLI for this homelab repo.\n")
     print("global options:")
     print("  --debug           Enable verbose debug logging to stderr")
+    print("  --apply           Apply changes (deploy, pihole, caddy, dnscontrol)")
     print("")
     print("commands:")
     width = max(len(name) for name in COMMANDS)
@@ -31,14 +32,18 @@ def _print_help() -> None:
     print("\nRun: python -m homelab <command> --help")
 
 
-def _parse_global_options(argv: list[str]) -> tuple[bool, list[str]]:
+def _parse_global_options(argv: list[str]) -> tuple[bool, bool, list[str]]:
     """Parse global options that appear before the <command>.
 
     We intentionally only consume options *before* the command name so that
-    subcommands can continue to support their own flags (including --debug).
+    subcommands can continue to support their own flags (including --debug and --apply).
+    
+    Returns:
+        (debug, apply, remaining_argv)
     """
 
     debug = False
+    apply = False
     rest = list(argv)
 
     while rest and rest[0].startswith("-"):
@@ -51,12 +56,16 @@ def _parse_global_options(argv: list[str]) -> tuple[bool, list[str]]:
         if flag == "--debug":
             debug = True
             continue
+        
+        if flag == "--apply":
+            apply = True
+            continue
 
         print(f"Error: unknown global option: {flag}", file=sys.stderr)
         _print_help()
         raise SystemExit(2)
 
-    return debug, rest
+    return debug, apply, rest
 
 
 def _build_run_parser() -> argparse.ArgumentParser:
@@ -156,8 +165,13 @@ def _plan_run(argv: list[str]) -> _RunPlan:
     return _RunPlan(apply=bool(args.apply), tailnet=getattr(args, "tailnet", None), features=ordered)
 
 
-def _run_mode(argv: list[str], *, debug: bool) -> int:
-    logger.debug("run: argv=%r debug=%s", argv, debug)
+def _run_mode(argv: list[str], *, debug: bool, apply: bool) -> int:
+    logger.debug("run: argv=%r debug=%s apply=%s", argv, debug, apply)
+    
+    # If global --apply was set and --apply is not in argv, add it
+    if apply and "--apply" not in argv:
+        argv = ["--apply"] + argv
+    
     plan = _plan_run(argv)
     logger.debug("run: plan=%r", plan)
     if not plan.features:
@@ -213,9 +227,12 @@ def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
 
-    debug, argv = _parse_global_options(argv)
+    debug, apply, argv = _parse_global_options(argv)
     configure_logging(debug=debug)
-    logger.debug("global debug enabled")
+    if debug:
+        logger.debug("global debug enabled")
+    if apply:
+        logger.debug("global apply enabled")
 
     if not argv or argv[0] in {"-h", "--help"}:
         _print_help()
@@ -224,17 +241,29 @@ def main(argv: list[str] | None = None) -> int:
     command = argv[0]
     cmd_argv = argv[1:]
 
-    # If global --debug was enabled, try to forward it to subcommands that
-    # already support their own --debug flag (preserves existing UX).
-    if debug and "--debug" not in cmd_argv and command in {"caddy", "mikrotik"}:
-        cmd_argv = ["--debug", *cmd_argv]
+    # Forward global flags to subcommands that support them
+    forwarded_flags = []
+    
+    # Commands that support --debug
+    if debug and "--debug" not in cmd_argv:
+        if command in {"caddy", "mikrotik", "deploy", "pihole", "dnscontrol"}:
+            forwarded_flags.append("--debug")
+    
+    # Commands that support --apply
+    if apply and "--apply" not in cmd_argv:
+        if command in {"deploy", "pihole", "caddy", "dnscontrol"}:
+            forwarded_flags.append("--apply")
+    
+    if forwarded_flags:
+        cmd_argv = forwarded_flags + cmd_argv
 
     if command == "run":
-        # For run-mode we don't have a dedicated flag, but forwarding --debug to
-        # sub-tools makes their existing debug output visible.
+        # For run-mode, forward global flags to sub-tools
         if debug:
             logger.debug("forwarding global --debug to run-mode subcommands")
-        return _run_mode(cmd_argv, debug=debug)
+        if apply:
+            logger.debug("forwarding global --apply to run-mode subcommands")
+        return _run_mode(cmd_argv, debug=debug, apply=apply)
 
     entry = COMMANDS.get(command)
     if entry is None:

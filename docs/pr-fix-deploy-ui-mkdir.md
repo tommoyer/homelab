@@ -189,3 +189,96 @@ def _select_deployable_node(nodes_df: pd.DataFrame) -> str | None:
 ---
 
 **Impact**: Fixes critical mkdir error and provides consistent, professional UI across all tools
+
+## Additional Enhancement: Global Flags (Latest Commit)
+
+### Problem
+
+Flags like `--debug` and `--apply` had to be specified per-command:
+
+```bash
+python -m homelab deploy hostname --apply --debug
+python -m homelab pihole --apply
+python -m homelab caddy --debug --apply
+```
+
+This was:
+- Inconsistent (had to remember flag order for each command)
+- Verbose (repetitive flag placement)
+- Easy to forget (especially --apply in production scripts)
+
+### Solution
+
+Moved `--debug` and `--apply` to **global flags** that work before any command:
+
+```bash
+# New way (recommended)
+python -m homelab --apply deploy hostname
+python -m homelab --debug --apply pihole
+python -m homelab --apply run --pihole --caddy
+
+# Old way (still works)
+python -m homelab deploy hostname --apply --debug
+```
+
+### Implementation
+
+**Changes to `homelab/cli.py`:**
+
+1. **Updated `_parse_global_options()`**
+   - Now parses `--apply` in addition to `--debug`
+   - Returns `(debug, apply, remaining_argv)` tuple
+
+2. **Enhanced flag forwarding in `main()`**
+   - Automatically forwards `--debug` to: deploy, pihole, caddy, dnscontrol, mikrotik
+   - Automatically forwards `--apply` to: deploy, pihole, caddy, dnscontrol
+   - Checks if flag already in argv to avoid duplicates
+
+3. **Updated `_run_mode()`**
+   - Now accepts `apply` parameter
+   - Global `--apply` works with run mode
+
+4. **Updated help text**
+   - Shows both flags as global options
+
+### Flag Support Matrix
+
+| Command | --debug | --apply |
+|---------|---------|---------|
+| deploy | ✅ | ✅ |
+| pihole | ✅ | ✅ |
+| caddy | ✅ | ✅ |
+| dnscontrol | ✅ | ✅ |
+| mikrotik | ✅ | ❌ |
+| subnet_assign | ❌ | ❌ |
+
+### Benefits
+
+✅ **Consistency**: Same flag placement across all commands  
+✅ **Convenience**: One flag affects all relevant commands  
+✅ **Clarity**: Intent is clear when flags come before command  
+✅ **Backward compatible**: Per-command flags still work
+
+### Examples
+
+**Before:**
+```bash
+# Deploy with apply
+python -m homelab deploy hostname --apply --debug
+
+# Run multiple tools with apply
+python -m homelab run --apply --pihole --caddy --dnscontrol
+```
+
+**After:**
+```bash
+# Deploy with apply (cleaner)
+python -m homelab --debug --apply deploy hostname
+
+# Run multiple tools with apply (same)
+python -m homelab --apply run --pihole --caddy --dnscontrol
+```
+
+### Documentation
+
+See `docs/global-flags.md` for comprehensive usage guide.
