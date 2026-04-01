@@ -40,7 +40,7 @@ def get_zones(sheet_url, zones_gid):
     df = sheets.get_sheet_df(sheet_url, zones_gid, 30, "Zones")
     zones = []
     for _, row in df.iterrows():
-        subnet = sheets.as_str(row.get("subnet"))
+        subnet = sheets.as_str(row.get("network"))
         vlan_name = sheets.as_str(row.get("vlan_name"))
         if subnet and vlan_name:
             zones.append({'subnet': subnet, 'vlan_name': vlan_name})
@@ -108,8 +108,7 @@ def main(argv=None):
     sheet_url = args.sheet_url
     zones_gid = args.zones_gid
     nodes_gid = args.nodes_gid
-    print(f"DEBUG: sheet_url={sheet_url!r} zones_gid={zones_gid!r} nodes_gid={nodes_gid!r}")
-    if not (sheet_url and zones_gid and nodes_gid):
+    if (sheet_url is None or zones_gid is None or nodes_gid is None):
         print("Missing sheet_url, zones_gid, or nodes_gid. Check config or provide overrides.")
         return 1
     zones = get_zones(sheet_url, zones_gid)
