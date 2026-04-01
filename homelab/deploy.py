@@ -262,6 +262,12 @@ def _add_parser_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging to see detailed execution information",
+    )
+
+    parser.add_argument(
         "--render-dir",
         type=Path,
         default=None,
@@ -897,6 +903,12 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
             return 0
         args.hostname = selected
         logger.info("Selected node: %s", args.hostname)
+    
+    # Configure logging level based on --debug flag
+    if getattr(args, "debug", False):
+        logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
+        logger.setLevel(logging.DEBUG)
+        logger.debug("Debug logging enabled")
     
     logger.info("Starting deployment for node: %s", args.hostname)
 

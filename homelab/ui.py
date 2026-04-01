@@ -320,4 +320,9 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 1
         
         # Wait for user before returning to menu
-        input("\nPress Enter to return to menu...")
+        try:
+            input("\nPress Enter to return to menu...")
+        except (KeyboardInterrupt, EOFError):
+            # User pressed Ctrl+C or Ctrl+D, just return to menu
+            print()  # New line for cleaner output
+            pass
