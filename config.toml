@@ -63,6 +63,30 @@ enabled = true
 # Path or name of the tailscale CLI binary.
 # command = "tailscale"
 
+[tailscale_install]
+# Install Tailscale according to each Nodes row's `tailscale_install_method`.
+# Supported sheet values:
+#   - "Tailscale Install Script"
+#   - "Proxmox Helper Script"
+#
+# This tool uses [globals].sheet_url and [globals].nodes_gid by default.
+# sheet_url = "https://.../export?format=csv&gid=0"
+# nodes_gid = 344016240
+
+# Direct-node install (method: "Tailscale Install Script")
+node_user = "root"
+node_port = 22
+node_identity_file = ""
+node_password_env = ""
+
+# Proxmox-side helper (method: "Proxmox Helper Script")
+# `proxmox_user` and `proxmox_password_env` can also come from [deploy] when unset.
+proxmox_user = "root@pam"
+proxmox_port = 22
+proxmox_identity_file = ""
+proxmox_password_env = "PROXMOX_PASSWORD"
+proxmox_helper_script_url = "https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/addon/add-tailscale-lxc.sh"
+
 [pihole]
 # Example overrides (optional):
 # sheet_url = "https://.../export?format=csv&gid=0"  # defaults to globals.sheet_url
@@ -95,6 +119,12 @@ public_target_label = "_public"
 # Cloudflare token source for generated creds.json and --apply (dnscontrol push).
 cloudflare_token_env = "CLOUDFLARE_API_TOKEN"
 
+# Cloudflare account ID written to generated creds.json as "accountid".
+cloudflare_account_id = "31588fa003df895dfd4fcbdd0e42c58d"
+
+# Environment variable fallback for Cloudflare account ID.
+cloudflare_account_id_env = "CLOUDFLARE_ACCOUNT_ID"
+
 # dnscontrol executable used when --apply is enabled.
 dnscontrol_command = "dnscontrol"
 
@@ -119,6 +149,8 @@ mac_column = "MAC Address"
 # Interface names (match your RouterOS config).
 dmz_interface = "vlan20-dmz"
 homelab_interface = "vlan30-homelab"
+hivemind_interface = "vlan100-clients"
+managment_interface = "vlan10-mgmt"
 
 # Default output base path used by prompt mode.
 output = "./generated/mikrotik"

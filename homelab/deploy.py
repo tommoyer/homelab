@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import curses
 import ipaddress
+import json
 import logging
 import os
 import re
 import shlex
 import subprocess
 import sys
-import curses
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,19 +23,13 @@ from .config import (
     resolve_path_relative_to_config,
 )
 from .resolver import HostResolver, build_resolver
-from .sheets import (
-    get_sheet_df,
-    as_str,
-    build_sheet_url,
-    df_with_normalized_columns,
-    load_nodes_lookup,
-)
+from .sheets import as_str, df_with_normalized_columns, get_sheet_df, load_nodes_lookup
 from .ssh import prefix_sshpass, require_command, sshpass_env_from_password_env
 
 logger = logging.getLogger(__name__)
 
 
-def run_ansible_playbooks(hostname: str, config_path: Path, extra_playbooks: list[str] | None = None) -> bool:
+def run_ansible_playbooks(hostname: str, config_path: Path, settings: dict, node_cfg: dict, extra_playbooks: list[str] | None = None) -> bool:
     """
     Run bootstrap.yaml, hardening.yaml, and any additional playbooks for the given hostname.
     
@@ -50,6 +45,13 @@ def run_ansible_playbooks(hostname: str, config_path: Path, extra_playbooks: lis
     ansible_dir = repo_root / "ansible"
     inventory_script = ansible_dir / "inventory" / "inventory-spreadsheet.py"
     playbooks = ["bootstrap.yaml", "hardening.yaml"]
+
+    effective_settings = dict(settings)
+    overrides = node_cfg.get("settings_override") or {}
+    if isinstance(overrides, dict) and overrides:
+        effective_settings.update(overrides)
+
+    apply = bool(effective_settings.get("apply", False))
     
     # Append extra playbooks if provided
     if extra_playbooks:
@@ -69,11 +71,17 @@ def run_ansible_playbooks(hostname: str, config_path: Path, extra_playbooks: lis
             str(playbook_path),
         ]
         logger.info(f"Running: {' '.join(shlex.quote(str(c)) for c in cmd)}")
-        try:
-            result = subprocess.run(cmd, env=env, check=True)
-        except subprocess.CalledProcessError as exc:
-            logger.error(f"Ansible playbook failed: {playbook} for {hostname}: {exc}")
-            success = False
+        if not apply:
+            print("Dry run (apply mode disabled): no remote changes made")
+            print(f"- would run: {' '.join(shlex.quote(str(c)) for c in cmd)}")
+            success = True
+            continue
+        else:
+            try:
+                result = subprocess.run(cmd, env=env, check=True)
+            except subprocess.CalledProcessError as exc:
+                logger.error(f"Ansible playbook failed: {playbook} for {hostname}: {exc}")
+                success = False
     return success
 
 
@@ -111,7 +119,6 @@ def _normalize_int_like_string(value: object) -> str:
     if m:
         return m.group(1)
     return cleaned
-
 
 
 def _parse_playbooks_value(value: object) -> list[str]:
@@ -253,18 +260,17 @@ def _add_parser_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--apply",
+        "--_apply",
+        dest="apply",
         action="store_true",
-        help=(
-            "Apply changes to the Proxmox node over SSH (sync defaults + run the helper script). "
-            "Without --apply, performs a dry run: renders templates locally and prints what would be executed."
-        ),
+        help=argparse.SUPPRESS,
     )
 
     parser.add_argument(
-        "--debug",
+        "--_debug",
+        dest="debug",
         action="store_true",
-        help="Enable debug logging to see detailed execution information",
+        help=argparse.SUPPRESS,
     )
 
     parser.add_argument(
@@ -273,7 +279,7 @@ def _add_parser_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "Directory to write rendered service defaults during dry-run. "
-            "Defaults to <repo>/pve-scripts/rendered/<hostname>/"
+            "Defaults to <repo>/generated/pve-scripts/"
         ),
     )
 
@@ -403,6 +409,12 @@ def build_node_template_data(row: pd.Series) -> dict:
 
     vlan_id = _normalize_int_like_string(row.get("vlan_id"))
 
+    # New resource columns: Cores, RAM, Disk
+    # Keep values as normalized int-like strings so templates can use them directly.
+    cores = _normalize_int_like_string(row.get("cores"))
+    ram = _normalize_int_like_string(row.get("ram"))
+    disk = _normalize_int_like_string(row.get("disk"))
+
     # These aren't in your provided sheet headers, but we keep them as optional
     # keys so templates can reference them without StrictUndefined errors.
     gateway = as_str(row.get("gateway"))
@@ -474,7 +486,13 @@ def build_node_template_data(row: pd.Series) -> dict:
         "interface": interface,
         "ns": ns,
         "mac": mac,
+        # Backwards-compatible alias: some templates reference mac_address
+        "mac_address": mac,
         "searchdomain": searchdomain,
+        # Resource sizing for Proxmox helper scripts (Cores, RAM in MiB, Disk in GiB)
+        "cores": cores,
+        "ram": ram,
+        "disk": disk,
     }
 
 
@@ -504,6 +522,36 @@ def infer_script_id_from_url(script_url: str) -> str | None:
             name = name[: -len(suffix)]
             break
     return name or None
+
+
+def infer_service_name_from_script_url(script_url: str, fallback: str | None = None) -> str | None:
+    """Infer a service name from the Proxmox helper script URL.
+
+    Examples:
+      - https://.../debian.sh -> debian
+      - ct/debian.sh -> debian
+      - https://.../scripts?id=debian -> debian
+    """
+
+    try:
+        parsed = urllib.parse.urlparse(str(script_url))
+    except Exception:
+        parsed = urllib.parse.urlparse("")
+
+    path_name = Path(parsed.path).name.strip()
+    if path_name:
+        for suffix in (".sh", ".bash"):
+            if path_name.endswith(suffix):
+                return path_name[: -len(suffix)] or fallback
+        stem = Path(path_name).stem.strip()
+        if stem and stem not in {"scripts", "index"}:
+            return stem
+
+    inferred = infer_script_id_from_url(script_url)
+    if inferred:
+        return inferred
+
+    return normalize_template_id(fallback or "")
 
 
 def _build_ssh_scp_env_and_user(
@@ -590,28 +638,33 @@ def _sync_pve_helper_defaults(
     """Copy defaults and per-service defaults to the PVE node.
 
     - Copies repo pve-scripts/defaults.vars -> /usr/local/community-scripts/defaults.vars
-    - Renders repo pve-scripts/<script_id>.vars.j2 -> /usr/local/community-scripts/defaults/<script_id>.vars
+    - Renders repo pve-scripts/vars.j2 -> /usr/local/community-scripts/defaults/<service-name>.vars
     """
 
-    script_id = node_cfg.get("script_id")
-    if not script_id:
-        logger.error(
-            "Unable to determine script id for %s (needed to pick a pve-scripts/*.vars.j2 template)",
-            node_cfg.get("hostname"),
-        )
-        return False
+    script_id = as_str(node_cfg.get("script_id")) or None
 
     repo_root = Path(__file__).resolve().parents[1]
     templates_dir = repo_root / "templates" / "pve-scripts"
     default_generated_dir = repo_root / "generated" / "pve-scripts"
     local_defaults_vars = templates_dir / "defaults.vars"
-    local_service_template = templates_dir / f"{script_id}.vars.j2"
+    local_service_template = templates_dir / "vars.j2"
 
     if not local_defaults_vars.exists():
         logger.error("Missing local defaults vars file: %s", local_defaults_vars)
         return False
     if not local_service_template.exists():
         logger.error("Missing local service vars template: %s", local_service_template)
+        return False
+
+    service_name = infer_service_name_from_script_url(
+        as_str(node_cfg.get("script_url")),
+        fallback=as_str(script_id),
+    )
+    if not service_name:
+        logger.error(
+            "Unable to infer service name from helper script for %s",
+            node_cfg.get("hostname"),
+        )
         return False
 
     try:
@@ -651,7 +704,7 @@ def _sync_pve_helper_defaults(
 
     remote_defaults_vars = "/usr/local/community-scripts/defaults.vars"
     remote_defaults_dir = "/usr/local/community-scripts/defaults"
-    remote_service_vars = f"{remote_defaults_dir}/{script_id}.vars"
+    remote_service_vars = f"{remote_defaults_dir}/{service_name}.vars"
 
     logger.info("Syncing PVE community-scripts defaults to %s", ssh_target)
 
@@ -677,6 +730,7 @@ def _sync_pve_helper_defaults(
             context={
                 "generated_at": generated_at,
                 "script_id": script_id,
+                "service_name": service_name,
                 "node": node_cfg.get("node", {}),
                 "ssh_authorized_key": ssh_authorized_key,
             },
@@ -693,14 +747,11 @@ def _sync_pve_helper_defaults(
         config_render_dir = settings.get("render_dir")
         if config_render_dir:
             out_dir = resolve_path_relative_to_config(config_path, str(config_render_dir))
-            node_name = as_str(node_cfg.get("hostname")) or "unknown"
-            out_dir = out_dir / node_name
         else:
-            node_name = as_str(node_cfg.get("hostname")) or "unknown"
-            out_dir = default_generated_dir / node_name
+            out_dir = default_generated_dir
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
-        local_rendered_path = out_dir / f"{script_id}.vars"
+        local_rendered_path = out_dir / f"{service_name}.vars"
         local_rendered_path.write_text(rendered, encoding="utf-8")
     except Exception as exc:
         logger.error("Failed to write rendered vars file: %s", exc)
@@ -708,7 +759,7 @@ def _sync_pve_helper_defaults(
 
     if not apply:
         # Dry-run: print planned remote actions.
-        print("Dry run (no --apply): no remote changes made")
+        print("Dry run (apply mode disabled): no remote changes made")
         print("- step: sync PVE community-scripts defaults")
         print(f"- generated: {local_rendered_path}")
         print(f"- would ssh: {ssh_target} mkdir -p {remote_defaults_dir}")
@@ -814,11 +865,11 @@ def run_proxmox_helper_script(
 
     if not apply:
         target = f"{ssh_user}@{ssh_host}"
-        print("Dry run (no --apply): no remote changes made")
+        print("Dry run (apply mode disabled): no remote changes made")
         print("- step: run Proxmox helper script")
         print(f"- would ssh: {target} (port {ssh_port}) execute:")
         print(f"  {cmd}")
-        print("Re-run with --apply to perform these actions.")
+        print("Re-run with global --apply to perform these actions.")
         return True
 
     # We execute this on the Proxmox host using SSH.
@@ -844,6 +895,95 @@ def run_proxmox_helper_script(
     except subprocess.CalledProcessError as e:
         logger.error("Failed to execute Proxmox Helper Script: %s", e)
         return False
+
+
+def _proxmox_hostname_exists(
+    *,
+    hostname: str,
+    settings: dict,
+    node_cfg: dict,
+    config_path: Path,
+    nodes_lookup: dict[str, str] | None = None,
+) -> bool:
+    """Return True when a VM/CT with the given hostname already exists in the Proxmox cluster.
+
+    Uses `pvesh get /cluster/resources --type vm` over SSH to the configured Proxmox host.
+    On lookup failure, this function logs a warning and returns False so deployment can proceed.
+    """
+
+    effective_settings = dict(settings)
+    overrides = node_cfg.get("settings_override") or {}
+    if isinstance(overrides, dict) and overrides:
+        effective_settings.update(overrides)
+
+    try:
+        ssh_port, identity_file, env, use_sshpass, ssh_user, ssh_host = _build_ssh_scp_env_and_user(
+            settings=effective_settings,
+            config_path=config_path,
+            apply=True,
+            nodes_lookup=nodes_lookup,
+        )
+    except Exception as exc:
+        logger.warning("Unable to check existing Proxmox guests: %s", exc)
+        return False
+
+    ssh_cmd = [
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-p",
+        str(ssh_port),
+    ]
+    if identity_file is not None:
+        ssh_cmd.extend(["-i", str(identity_file)])
+    ssh_cmd.extend(
+        [
+            f"{ssh_user}@{ssh_host}",
+            "pvesh get /cluster/resources --type vm --output-format json",
+        ]
+    )
+    ssh_cmd = prefix_sshpass(ssh_cmd, enabled=use_sshpass)
+
+    try:
+        result = subprocess.run(
+            ssh_cmd,
+            check=True,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        logger.warning("Failed to query Proxmox cluster resources: %s", exc)
+        return False
+
+    try:
+        resources = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError:
+        logger.warning("Unexpected response while checking Proxmox cluster resources")
+        return False
+
+    target = (hostname or "").strip().lower()
+    if not target:
+        return False
+
+    for item in resources:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip().lower()
+        if name and name == target:
+            vmid = item.get("vmid")
+            vm_type = item.get("type")
+            logger.info(
+                "Detected existing Proxmox guest '%s' (vmid=%s, type=%s); helper script will be skipped.",
+                hostname,
+                vmid,
+                vm_type,
+            )
+            return True
+
+    return False
 
 
 def main(argv: list[str] | argparse.Namespace | None = None) -> int:
@@ -952,7 +1092,7 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
     if not run_helper and not run_ansible:
         logger.info("Node '%s' has no Script URL and Managed=false. Skipping deployment.", args.hostname)
         return 0
-    
+
     # Phase 1: Run Proxmox Helper Script if Script URL is set
     if run_helper:
         # Validate that Proxmox Node is set
@@ -961,24 +1101,35 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
             logger.error("Script URL is set but Proxmox Node is blank for '%s'. Cannot deploy.", args.hostname)
             logger.error("Please set the 'Proxmox Node' column in the Nodes sheet.")
             return 1
-        
-        logger.info("=" * 60)
-        logger.info("PHASE 1: Running Proxmox Helper Script")
-        logger.info("Script URL: %s", script_url)
-        logger.info("Proxmox Node: %s", proxmox_node)
-        logger.info("=" * 60)
-        success = run_proxmox_helper_script(
-            node_cfg=node_cfg,
+
+        if _proxmox_hostname_exists(
+            hostname=args.hostname,
             settings=settings,
+            node_cfg=node_cfg,
             config_path=config_path,
             nodes_lookup=nodes_lookup,
-        )
-        if not success:
-            logger.error("Proxmox Helper Script failed for %s", args.hostname)
-            return 1
-        logger.info("=" * 60)
-        logger.info("PHASE 1: Proxmox Helper Script completed successfully")
-        logger.info("=" * 60)
+        ):
+            logger.info("Skipping Proxmox Helper Script because '%s' already exists in the cluster.", args.hostname)
+            run_helper = False
+        
+        if run_helper:
+            logger.info("=" * 60)
+            logger.info("PHASE 1: Running Proxmox Helper Script")
+            logger.info("Script URL: %s", script_url)
+            logger.info("Proxmox Node: %s", proxmox_node)
+            logger.info("=" * 60)
+            success = run_proxmox_helper_script(
+                node_cfg=node_cfg,
+                settings=settings,
+                config_path=config_path,
+                nodes_lookup=nodes_lookup,
+            )
+            if not success:
+                logger.error("Proxmox Helper Script failed for %s", args.hostname)
+                return 1
+            logger.info("=" * 60)
+            logger.info("PHASE 1: Proxmox Helper Script completed successfully")
+            logger.info("=" * 60)
     
     # Phase 2: Run Ansible if Managed is true
     if run_ansible:
@@ -995,7 +1146,7 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
         else:
             logger.info("Playbooks: bootstrap + hardening only")
         
-        ansible_success = run_ansible_playbooks(args.hostname, config_path, extra_playbooks)
+        ansible_success = run_ansible_playbooks(args.hostname, config_path, settings, node_cfg, extra_playbooks)
         if not ansible_success:
             logger.error("Ansible playbooks failed for %s", args.hostname)
             return 1

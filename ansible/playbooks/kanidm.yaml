@@ -1,0 +1,268 @@
+---
+# Deploy Kanidm with Docker Compose to a specific host/group via `target_hosts`.
+#
+# For each targeted host this playbook expects:
+#   templates/<hostname>-kanidm-compose.yaml      (required, Jinja2)
+#   templates/<hostname>-kanidm-server.toml.j2    (required, Jinja2)
+#   templates/<hostname>-kanidm.env.j2            (optional, Jinja2)
+#
+# Usage:
+#   ansible-playbook playbooks/kanidm.yaml -e target_hosts=my-kanidm-host
+#   ansible-playbook playbooks/kanidm.yaml -e target_hosts=my-kanidm-host -e kanidm_domain=kanidm.example.com
+#
+# Variables:
+#   target_hosts            Required host/group to target.
+#   service_name            Directory name under compose_base_dir. Default: kanidm
+#   compose_base_dir        Parent directory for all services. Default: /home/ansible
+#   kanidm_domain           Public Kanidm FQDN used for cert generation and naming.
+#   kanidm_image_tag        Kanidm image tag for cert generation. Default: latest
+#   kanidm_ppa_component    Kanidm apt component to use. Default: stable
+#   kanidm_client_packages  Kanidm client packages to install. Default: [kanidm]
+#   caddy_host              Inventory host that should receive Kanidm chain cert. Default: caddy
+#   caddy_cert_dir          Destination dir on caddy_host. Default: /etc/caddy/certs
+#   caddy_cert_filename     Filename on caddy_host. Default: <kanidm_domain>-chain.pem
+#
+- name: Deploy Kanidm Docker Compose stack
+  hosts: "{{ target_hosts | default('kanidm') }}"
+  gather_facts: yes
+  become: yes
+
+  vars:
+    service_name: kanidm
+    compose_base_dir: /home/ansible
+    compose_deploy_dir: "{{ compose_base_dir }}/{{ service_name }}"
+    kanidm_data_dir: "{{ compose_deploy_dir }}/data"
+    kanidm_image_tag: latest
+    kanidm_domain: "kanidm.moyer.wtf"
+    kanidm_ppa_component: stable
+    kanidm_client_packages: [kanidm]
+    caddy_host: caddy
+    caddy_cert_dir: /etc/caddy/certs
+    caddy_cert_filename: "kanidm.pem"
+
+    _compose_template: "{{ playbook_dir }}/../templates/{{ inventory_hostname }}-kanidm-compose.yaml"
+    _server_template: "{{ playbook_dir }}/../templates/{{ inventory_hostname }}-kanidm-server.toml.j2"
+    _env_template: "{{ playbook_dir }}/../templates/{{ inventory_hostname }}-kanidm.env.j2"
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # Pre-flight checks (controller-side)
+    # -------------------------------------------------------------------------
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - (kanidm_domain | default('') | trim) | length > 0
+          - ansible_os_family == 'Debian'
+        fail_msg: >-
+          Missing required variable `kanidm_domain` or unsupported OS family.
+          This playbook currently supports Debian-family hosts only.
+          Example: -e kanidm_domain=kanidm.example.com
+
+    - name: Check whether kanidm compose template exists on controller
+      ansible.builtin.stat:
+        path: "{{ _compose_template }}"
+      delegate_to: localhost
+      become: false
+      register: _compose_template_stat
+
+    - name: Fail when no kanidm compose template found for host
+      ansible.builtin.fail:
+        msg: >-
+          No Kanidm compose template found for host '{{ inventory_hostname }}'.
+          Expected: {{ _compose_template }}
+      when: not _compose_template_stat.stat.exists
+
+    - name: Check whether kanidm server.toml template exists on controller
+      ansible.builtin.stat:
+        path: "{{ _server_template }}"
+      delegate_to: localhost
+      become: false
+      register: _server_template_stat
+
+    - name: Fail when no kanidm server.toml template found for host
+      ansible.builtin.fail:
+        msg: >-
+          No Kanidm server.toml template found for host '{{ inventory_hostname }}'.
+          Expected: {{ _server_template }}
+      when: not _server_template_stat.stat.exists
+
+    - name: Check whether kanidm env template exists on controller
+      ansible.builtin.stat:
+        path: "{{ _env_template }}"
+      delegate_to: localhost
+      become: false
+      register: _env_template_stat
+
+    # -------------------------------------------------------------------------
+    # Kanidm client tools (APT repo + package install)
+    # -------------------------------------------------------------------------
+    - name: Ensure apt trusted key directory exists
+      ansible.builtin.file:
+        path: /etc/apt/trusted.gpg.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install Kanidm PPA signing key
+      ansible.builtin.get_url:
+        url: https://kanidm.github.io/kanidm_ppa/kanidm_ppa.asc
+        dest: /etc/apt/trusted.gpg.d/kanidm_ppa.asc
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Configure Kanidm PPA apt repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/kanidm_ppa.asc]
+          https://kanidm.github.io/kanidm_ppa
+          {{ ansible_distribution_release }}
+          {{ kanidm_ppa_component }}
+        filename: kanidm_ppa
+        state: present
+
+    - name: Install Kanidm client tools packages
+      ansible.builtin.apt:
+        name: "{{ kanidm_client_packages }}"
+        state: present
+        update_cache: yes
+
+    # -------------------------------------------------------------------------
+    # Directory layout
+    # -------------------------------------------------------------------------
+    - name: Ensure Kanidm service directory exists
+      ansible.builtin.file:
+        path: "{{ compose_deploy_dir }}"
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0750"
+
+    - name: Ensure Kanidm data directory exists
+      ansible.builtin.file:
+        path: "{{ kanidm_data_dir }}"
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0750"
+
+    - name: Ensure Kanidm cert directory exists
+      ansible.builtin.file:
+        path: "{{ kanidm_data_dir }}/certs"
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0750"
+
+    # -------------------------------------------------------------------------
+    # Deploy Kanidm files
+    # -------------------------------------------------------------------------
+    - name: Deploy kanidm compose file
+      ansible.builtin.template:
+        src: "{{ _compose_template }}"
+        dest: "{{ compose_deploy_dir }}/docker-compose.yaml"
+        owner: ansible
+        group: ansible
+        mode: "0640"
+      register: _compose_file
+
+    - name: Deploy kanidm server.toml
+      ansible.builtin.template:
+        src: "{{ _server_template }}"
+        dest: "{{ kanidm_data_dir }}/server.toml"
+        owner: ansible
+        group: ansible
+        mode: "0640"
+      register: _server_file
+
+    - name: Deploy kanidm .env file
+      ansible.builtin.template:
+        src: "{{ _env_template }}"
+        dest: "{{ compose_deploy_dir }}/.env"
+        owner: ansible
+        group: ansible
+        mode: "0600"
+      when: _env_template_stat.stat.exists
+      register: _env_file
+
+    # -------------------------------------------------------------------------
+    # Generate Kanidm TLS certificate when missing
+    # -------------------------------------------------------------------------
+    - name: Check whether Kanidm tls chain file exists
+      ansible.builtin.stat:
+        path: "{{ kanidm_data_dir }}/certs/chain.pem"
+      register: _kanidm_chain_stat
+
+    - name: Check whether Kanidm tls key file exists
+      ansible.builtin.stat:
+        path: "{{ kanidm_data_dir }}/certs/key.pem"
+      register: _kanidm_key_stat
+
+    - name: Generate Kanidm self-signed tls certificate and key (cert-generate)
+      ansible.builtin.command:
+        cmd: >-
+          docker run --rm
+          -v {{ kanidm_data_dir }}:/data
+          kanidm/server:{{ kanidm_image_tag }}
+          kanidmd cert-generate
+      when: not _kanidm_chain_stat.stat.exists or not _kanidm_key_stat.stat.exists
+      register: _kanidm_cert_generate
+
+    - name: Ensure Kanidm cert/key ownership after generation
+      ansible.builtin.file:
+        path: "{{ item }}"
+        owner: ansible
+        group: ansible
+        mode: "0640"
+      loop:
+        - "{{ kanidm_data_dir }}/certs/chain.pem"
+        - "{{ kanidm_data_dir }}/certs/key.pem"
+
+    # -------------------------------------------------------------------------
+    # Pull images and (re)start services
+    # -------------------------------------------------------------------------
+    - name: Pull Kanidm Docker images
+      ansible.builtin.command:
+        cmd: docker compose pull
+        chdir: "{{ compose_deploy_dir }}"
+      register: _compose_pull
+      changed_when: "'Pulled' in _compose_pull.stdout"
+
+    - name: Start Kanidm services (docker compose up -d)
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ compose_deploy_dir }}"
+      register: _compose_up
+      changed_when: >-
+        'Started' in _compose_up.stdout or
+        'Created' in _compose_up.stdout or
+        'Recreated' in _compose_up.stdout
+
+    # -------------------------------------------------------------------------
+    # Prepare cert payload for caddy host
+    # -------------------------------------------------------------------------
+    - name: Read Kanidm chain certificate
+      ansible.builtin.slurp:
+        src: "{{ kanidm_data_dir }}/certs/chain.pem"
+      register: _kanidm_chain_cert
+
+    - name: Ensure caddy cert directory exists
+      ansible.builtin.file:
+        path: "{{ caddy_cert_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      delegate_to: "{{ caddy_host }}"
+      run_once: true
+
+    - name: Copy Kanidm chain certificate to caddy host
+      ansible.builtin.copy:
+        dest: "{{ caddy_cert_dir }}/{{ caddy_cert_filename }}"
+        content: "{{ _kanidm_chain_cert.content | b64decode }}"
+        owner: root
+        group: root
+        mode: "0644"
+      delegate_to: "{{ caddy_host }}"
+      run_once: true

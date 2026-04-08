@@ -1,0 +1,21 @@
+---
+- name: Configure sysctl for Tailscale router
+  hosts: "{{ target_hosts | default('ts_router') }}"
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Create /etc/sysctl.d/99-tailscale.conf
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-tailscale.conf
+        content: "net.ipv4.ip_forward = 1\n"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Reload sysctl from /etc/sysctl.d/99-tailscale.conf
+      ansible.builtin.command:
+        cmd: "sysctl -p /etc/sysctl.d/99-tailscale.conf"
+      register: sysctl_apply
+      changed_when: sysctl_apply.rc == 0
+      failed_when: sysctl_apply.rc != 0
+

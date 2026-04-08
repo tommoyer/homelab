@@ -7,8 +7,6 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-import pandas as pd
-
 from .cli_common import (
     add_apply_argument,
     add_sheet_arguments,
@@ -16,16 +14,20 @@ from .cli_common import (
     build_base_parser,
 )
 from .config import (
-    DEFAULT_SHEET_URL,
     get_config_value,
     get_effective_table,
-    get_table,
     load_toml_or_exit,
     render_jinja_template,
     resolve_path_relative_to_config,
 )
 from .resolver import build_resolver
-from .sheets import as_str, build_sheet_url, df_with_normalized_columns, get_sheet_df, parse_bool
+from .sheets import (
+    as_str,
+    build_sheet_url,
+    df_with_normalized_columns,
+    get_sheet_df,
+    parse_bool,
+)
 from .ssh import (
     require_command,
     scp_base_args,
@@ -101,12 +103,12 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     parser.add_argument(
         "--pihole-user",
         default=get_config_value(tool_cfg, "pihole_user", None),
-        help="SSH username for the Pi-hole instance (used with --apply)",
+        help="SSH username for the Pi-hole instance (used when global --apply is enabled)",
     )
     parser.add_argument(
         "--pihole-host",
         default=get_config_value(tool_cfg, "pihole_host", None),
-        help="SSH hostname/IP for the Pi-hole instance (used with --apply)",
+        help="SSH hostname/IP for the Pi-hole instance (used when global --apply is enabled)",
     )
 
     default_use_sudo = bool(get_config_value(tool_cfg, "use_sudo", False))
@@ -282,81 +284,14 @@ def render_config(
         default_cname_target = parse_bool(row.get("default_cname_target"), default=False)
         row_hint = _sheet_row_hint(service_idx)
 
-        if ingress == "caddy" and exposure == "trusted":
-            # Trusted caddy services point to the caddy node's Tailscale MagicDNS name.
-            # Extract the short hostname (first label) from the FQDN for CNAME building.
-            caddy_short = caddy_host.split(".")[0] if caddy_host else ""
-            if not caddy_short:
-                raise RuntimeError(
-                    "caddy hostname is required to generate ingress=caddy CNAME records; "
-                    "set globals.caddy_host"
-                )
-            if not tailnet_domain:
-                raise RuntimeError(
-                    "tailnet domain is required to generate trusted CNAME records; "
-                    "set tailscale.tailnet_domain or pass --tailnet"
-                )
-            target = f"{caddy_short}.{tailnet_domain}".rstrip(".")
-        elif ingress == "caddy" and exposure == "public":
-            # Public caddy services point to caddy.<dns_zone> from the sheet.
-            caddy_short = caddy_host.split(".")[0] if caddy_host else ""
-            if not caddy_short:
-                raise RuntimeError(
-                    "caddy hostname is required to generate ingress=caddy CNAME records; "
-                    "set globals.caddy_host"
-                )
-            dns_zone = as_str(row.get("dns_zone")).lower().rstrip(".")
-            if not dns_zone:
-                raise RuntimeError(
-                    f"Services row {row_hint}: ingress=caddy, exposure=public requires a "
-                    f"'DNS Zone' column value for frontend_hostname={frontend_hostname!r}"
-                )
-            target = f"{caddy_short}.{dns_zone}".rstrip(".")
-        elif ingress == "direct" and exposure == "trusted":
-            # Trusted direct services point to <hostname>.<tailnet>.
-            # Extract just the short hostname (first label) from the FQDN.
-            backend_hostname = as_str(row.get("hostname")).lower().rstrip(".")
-            if not backend_hostname:
-                logger.debug(
-                    "pihole: skipping service row with frontend_hostname=%r — no target hostname (ingress=%r)",
-                    frontend_hostname,
-                    ingress,
-                )
-                _trace(
-                    (
-                        f"Services row {row_hint}: skip because target hostname missing "
-                        f"(frontend={frontend_hostname!r}, ingress={ingress!r})"
-                    ),
-                    frontend_hostname,
-                )
-                continue
-            short_hostname = backend_hostname.split(".")[0]
-            if not tailnet_domain:
-                raise RuntimeError(
-                    "tailnet domain is required to generate trusted CNAME records; "
-                    "set tailscale.tailnet_domain or pass --tailnet"
-                )
-            target = f"{short_hostname}.{tailnet_domain}".rstrip(".")
-        elif ingress == "direct" and exposure == "public":
-            # Public direct services point to the backend hostname.
-            target = as_str(row.get("hostname")).lower().rstrip(".")
-            if not target:
-                logger.debug(
-                    "pihole: skipping service row with frontend_hostname=%r — no target hostname (ingress=%r)",
-                    frontend_hostname,
-                    ingress,
-                )
-                _trace(
-                    (
-                        f"Services row {row_hint}: skip because target hostname missing "
-                        f"(frontend={frontend_hostname!r}, ingress={ingress!r})"
-                    ),
-                    frontend_hostname,
-                )
-                continue
+        # Simplified target selection:
+        # - ingress == "caddy" -> always point to the DMZ caddy FQDN
+        # - ingress == "direct" -> always point to the backend FQDN from the hostname column
+        # - otherwise -> fallback to the hostname column (same as direct)
+        if ingress == "caddy":
+            target = "caddy.dmz.moyer.wtf"
         else:
-            # For dstnat, blank, or any other ingress/exposure combination,
-            # use the hostname column as the target.
+            # Use the backend FQDN when available for direct/other ingress types
             target = as_str(row.get("hostname")).lower().rstrip(".")
             if not target:
                 logger.debug(
@@ -594,7 +529,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.apply:
         if not args.pihole_user or not args.pihole_host:
             print(
-                "Error: --apply requires --pihole-user and --pihole-host (or pihole_user/pihole_host in config)",
+                "Error: apply mode requires --pihole-user and --pihole-host (or pihole_user/pihole_host in config)",
                 file=sys.stderr,
             )
             return 2
@@ -611,7 +546,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Applied config to Pi-hole and reloaded DNS")
     else:
         remote_final_path = "/etc/pihole/pihole.toml"
-        print("Dry run (no --apply): no remote changes made")
+        print("Dry run (apply mode disabled): no remote changes made")
         print(f"- generated: {output_path}")
 
         if not args.pihole_user or not args.pihole_host:
@@ -629,7 +564,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"- would scp: {output_path} -> {target}:{remote_final_path}")
                 print(f"- would ssh: {target}: pihole reloaddns")
 
-        print("Re-run with --apply to perform these actions.")
+        print("Re-run with global --apply to perform these actions.")
 
     return 0
 

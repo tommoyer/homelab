@@ -24,19 +24,27 @@
 #   ansible-playbook playbooks/smtp-relay.yaml -e target_hosts=smtp-relay.lan
 
 - name: Provision Postfix SMTP relay
-  hosts: "{{ target_hosts | default('smtp_relay') }}"
+  hosts: "{{ target_hosts | default('smtp-relay') }}"
   gather_facts: yes
   become: yes
 
   vars:
-    smtp_relay_myhostname: smtp-relay.lan
+    smtp_relay_myhostname: smtp-relay.mgmt.moyer.wtf
     smtp_relay_myorigin: moyer.wtf
     smtp_relay_mydomain: moyer.wtf
-    smtp_relay_relayhost: smtp-relay.brevo.com
+    smtp_relay_relayhost: smtp.gmail.com
     smtp_relay_relayhost_port: 587
+    # Username used to authenticate to the upstream SMTP provider (Gmail).
+    # Set this in the playbook or override via extra-vars.
+    smtp_relay_username: tommoyer@gmail.com
+    # Map the playbook username to the variable expected by the sasl template.
+    smtp_sasl_login: "{{ smtp_relay_username }}"
     smtp_relay_mynetworks:
       - 127.0.0.0/8
       - 192.168.10.0/24
+      - 192.168.20.0/24
+      - 192.168.30.0/24
+      - 192.168.100.0/24
     smtp_relay_generic_maps_enable: true
     smtp_relay_generic_maps:
       - from: "root@{{ smtp_relay_mydomain }}"
@@ -68,7 +76,7 @@
     # -------------------------------------------------------------------------
     - name: Deploy /etc/postfix/main.cf
       ansible.builtin.template:
-        src: postfix-main.cf.j2
+        src: "{{ playbook_dir }}/../templates/postfix-main.cf.j2"
         dest: /etc/postfix/main.cf
         owner: root
         group: root
@@ -81,7 +89,7 @@
     # -------------------------------------------------------------------------
     - name: Deploy /etc/postfix/sasl_passwd
       ansible.builtin.template:
-        src: postfix-sasl_passwd.j2
+        src: "{{ playbook_dir }}/../templates/postfix-sasl_passwd.j2"
         dest: /etc/postfix/sasl_passwd
         owner: root
         group: root
@@ -111,7 +119,7 @@
     # -------------------------------------------------------------------------
     - name: Deploy /etc/postfix/generic
       ansible.builtin.template:
-        src: postfix-generic.j2
+        src: "{{ playbook_dir }}/../templates/postfix-generic.j2"
         dest: /etc/postfix/generic
         owner: root
         group: root

@@ -19,7 +19,7 @@ class _RunPlan:
 
 
 def _print_help() -> None:
-    print("usage: python -m homelab [-h] [--debug] <command> [args...]\n")
+    print("usage: python -m homelab [-h] [--debug] [--apply] <command> [args...]\n")
     print("Unified CLI for this homelab repo.\n")
     print("global options:")
     print("  --debug           Enable verbose debug logging to stderr")
@@ -36,7 +36,7 @@ def _parse_global_options(argv: list[str]) -> tuple[bool, bool, list[str]]:
     """Parse global options that appear before the <command>.
 
     We intentionally only consume options *before* the command name so that
-    subcommands can continue to support their own flags (including --debug and --apply).
+    --debug/--apply are global-only flags.
     
     Returns:
         (debug, apply, remaining_argv)
@@ -77,21 +77,12 @@ def _build_run_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    parser.add_argument(
-        "--apply",
-        action="store_true",
-        help=(
-            "Forward --apply to apply-capable features (pihole, caddy, dnscontrol). Without "
-            "--apply, tools run in dry-run mode and print what "
-            "would be done."
-        ),
-    )
     # If any of these are set, we treat it as an explicit allow-list.
     parser.add_argument("--pihole", action="store_true", help="Include Pi-hole config generation/apply")
     parser.add_argument(
         "--mikrotik",
         action="store_true",
-        help="Include prompt-driven MikroTik single-service command generation",
+        help="Include prompt-driven MikroTik command generation (single or batch)",
     )
     parser.add_argument(
         "--caddy",
@@ -111,12 +102,18 @@ def _build_run_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include dnscontrol public DNS generation/apply",
     )
+    parser.add_argument(
+        "--tailscale-install",
+        action="store_true",
+        help="Include Tailscale installation based on Nodes tailscale_install_method",
+    )
 
     # Optional explicit disables.
     parser.add_argument("--no-pihole", action="store_true", help="Exclude Pi-hole")
     parser.add_argument("--no-mikrotik", action="store_true", help="Exclude MikroTik prompt generator")
     parser.add_argument("--no-caddy", action="store_true", help="Exclude Caddy")
     parser.add_argument("--no-dnscontrol", action="store_true", help="Exclude dnscontrol")
+    parser.add_argument("--no-tailscale-install", action="store_true", help="Exclude tailscale_install")
 
     return parser
 
@@ -130,12 +127,14 @@ def _plan_run(argv: list[str]) -> _RunPlan:
         "mikrotik": bool(args.mikrotik),
         "caddy": bool(args.caddy),
         "dnscontrol": bool(args.dnscontrol),
+        "tailscale_install": bool(getattr(args, "tailscale_install", False)),
     }
     explicit_disables = {
         "pihole": bool(args.no_pihole),
         "mikrotik": bool(args.no_mikrotik),
         "caddy": bool(args.no_caddy),
         "dnscontrol": bool(args.no_dnscontrol),
+        "tailscale_install": bool(getattr(args, "no_tailscale_install", False)),
     }
 
     for feature, enabled in explicit_enables.items():
@@ -158,21 +157,19 @@ def _plan_run(argv: list[str]) -> _RunPlan:
             "pihole",
             "caddy",
             "dnscontrol",
+            "tailscale_install",
         ]
         if name in features
     ]
 
-    return _RunPlan(apply=bool(args.apply), tailnet=getattr(args, "tailnet", None), features=ordered)
+    return _RunPlan(apply=False, tailnet=getattr(args, "tailnet", None), features=ordered)
 
 
 def _run_mode(argv: list[str], *, debug: bool, apply: bool) -> int:
     logger.debug("run: argv=%r debug=%s apply=%s", argv, debug, apply)
-    
-    # If global --apply was set and --apply is not in argv, add it
-    if apply and "--apply" not in argv:
-        argv = ["--apply"] + argv
-    
+
     plan = _plan_run(argv)
+    plan = _RunPlan(apply=apply, tailnet=plan.tailnet, features=plan.features)
     logger.debug("run: plan=%r", plan)
     if not plan.features:
         print("Nothing to do (all features disabled)", file=sys.stderr)
@@ -188,26 +185,37 @@ def _run_mode(argv: list[str], *, debug: bool, apply: bool) -> int:
             if feature == "mikrotik":
                 f_argv: list[str] = []
                 if debug:
-                    f_argv.append("--debug")
+                    f_argv.append("--_debug")
                 code = int(module.main(f_argv))  # type: ignore[attr-defined]
             elif feature == "pihole":
-                f_argv = ["--apply"] if plan.apply else []
+                f_argv = []
+                if debug:
+                    f_argv.append("--_debug")
+                if plan.apply:
+                    f_argv.append("--_apply")
                 if plan.tailnet:
                     f_argv.extend(["--tailnet", plan.tailnet])
                 code = int(module.main(f_argv))  # type: ignore[attr-defined]
             elif feature == "caddy":
                 f_argv = []
                 if debug:
-                    f_argv.append("--debug")
+                    f_argv.append("--_debug")
                 if plan.apply:
-                    f_argv.append("--apply")
+                    f_argv.append("--_apply")
                 code = int(module.main(f_argv))  # type: ignore[attr-defined]
             elif feature == "dnscontrol":
                 f_argv = []
                 if debug:
-                    f_argv.append("--debug")
+                    f_argv.append("--_debug")
                 if plan.apply:
-                    f_argv.append("--apply")
+                    f_argv.append("--_apply")
+                code = int(module.main(f_argv))  # type: ignore[attr-defined]
+            elif feature == "tailscale_install":
+                f_argv = []
+                if debug:
+                    f_argv.append("--_debug")
+                if plan.apply:
+                    f_argv.append("--_apply")
                 code = int(module.main(f_argv))  # type: ignore[attr-defined]
             else:
                 print(f"Error: unknown run feature: {feature}", file=sys.stderr)
@@ -241,18 +249,31 @@ def main(argv: list[str] | None = None) -> int:
     command = argv[0]
     cmd_argv = argv[1:]
 
+    if (
+        "--debug" in cmd_argv
+        or "--apply" in cmd_argv
+        or "--_debug" in cmd_argv
+        or "--_apply" in cmd_argv
+    ):
+        print(
+            "Error: --debug and --apply are global-only flags. Place them before the command, "
+            "e.g. 'python -m homelab --debug --apply <command> ...'",
+            file=sys.stderr,
+        )
+        return 2
+
     # Forward global flags to subcommands that support them
     forwarded_flags = []
-    
+
     # Commands that support --debug
-    if debug and "--debug" not in cmd_argv:
-        if command in {"caddy", "mikrotik", "deploy", "pihole", "dnscontrol"}:
-            forwarded_flags.append("--debug")
-    
+    if debug:
+        if command in {"caddy", "mikrotik", "deploy", "pihole", "dnscontrol", "tailscale_install"}:
+            forwarded_flags.append("--_debug")
+
     # Commands that support --apply
-    if apply and "--apply" not in cmd_argv:
-        if command in {"deploy", "pihole", "caddy", "dnscontrol"}:
-            forwarded_flags.append("--apply")
+    if apply:
+        if command in {"deploy", "pihole", "caddy", "dnscontrol", "tailscale_install"}:
+            forwarded_flags.append("--_apply")
     
     if forwarded_flags:
         cmd_argv = forwarded_flags + cmd_argv

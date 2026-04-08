@@ -1,10 +1,10 @@
-# App-specific defaults for Caddy (caddy)
+# App defaults for {{ service_name or script_id or 'service' }}
 # Generated on {{ generated_at }}
 
 var_unprivileged=1
-var_cpu=2
-var_ram=2048
-var_disk=6
+var_cpu={{ node.cores or 2 }}
+var_ram={{ node.ram or 2048 }}
+var_disk={{ node.disk or 8 }}
 var_brg={{ node.bridge or 'vmbr0' }}
 var_net={{ node.net or 'dhcp' }}
 {% if node.gateway %}var_gateway={{ node.gateway }}{% endif %}
@@ -18,14 +18,14 @@ var_fuse=no
 var_tun=no
 var_gpu=no
 var_nesting=1
-var_keyctl=0
+var_keyctl=1
 var_mknod=0
 var_protection=no
 var_timezone=America/New_York
 var_tags=deploy
 var_verbose=no
 var_hostname={{ node.hostname }}
+{% if node.mac_address or node.mac %}var_mac={{ node.mac_address or node.mac }}{% endif %}
 {% if node.searchdomain %}var_searchdomain={{ node.searchdomain }}{% endif %}
 var_template_storage=cephfs
 var_container_storage=rbd
-

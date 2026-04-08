@@ -24,10 +24,9 @@ from .config import (
 from .logging_utils import configure_logging
 from .resolver import build_resolver
 from .sheets import (
-    get_sheet_df,
     as_str,
     build_sheet_url,
-    df_with_normalized_columns,
+    get_sheet_df,
     load_nodes_lookup,
     normalize_ip,
     normalize_ports,
@@ -66,6 +65,76 @@ def caddy_handler_label(fqdn: str) -> str:
     return slugify(leftmost)
 
 
+def caddy_hostname_label(fqdn: str) -> str:
+    fqdn = (fqdn or "").strip().lower().rstrip(".")
+    if not fqdn:
+        return "service"
+    return slugify(fqdn.split(".", 1)[0])
+
+
+def resolve_host_template_path(*, template_dir: Path | None, fqdn: str) -> Path | None:
+    if template_dir is None:
+        return None
+    host = caddy_hostname_label(fqdn)
+    normalized_fqdn = (fqdn or "").strip().lower().rstrip(".")
+    candidates = [
+        template_dir / f"{normalized_fqdn}.j2",
+        template_dir / f"{host}.j2",
+    ]
+    for path in candidates:
+        if path.exists() and path.is_file():
+            return path
+    return None
+
+
+def render_host_template_block_lines(
+    *,
+    template_dir: Path | None,
+    svc: dict[str, Any],
+    debug: bool,
+) -> list[str]:
+    fqdn = str(svc["fqdn"])
+    backend = str(svc["backend"])
+    host = caddy_hostname_label(fqdn)
+    template_path = resolve_host_template_path(template_dir=template_dir, fqdn=fqdn)
+
+    if template_path is None:
+        return []
+
+    try:
+        rendered = render_jinja_template(
+            template_path=template_path,
+            context={
+                "fqdn": fqdn,
+                "backend": backend,
+                "hostname": host,
+                "service": svc,
+                "handler_label": f"svc-{caddy_handler_label(fqdn)}",
+            },
+        )
+    except Exception as exc:
+        print(
+            f"Error: failed to render host template '{template_path.name}' for {fqdn}: {exc}",
+            file=sys.stderr,
+        )
+        raise
+
+    lines = [line.rstrip() for line in rendered.splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
+
+    if not lines:
+        print(
+            f"Error: host template '{template_path.name}' rendered empty for {fqdn}",
+            file=sys.stderr,
+        )
+        raise ValueError(f"empty host template: {template_path}")
+
+    if debug:
+        logger.debug("caddy: host template for %s -> %s", fqdn, template_path.name)
+    return lines
+
+
 def determine_zone(hostname: str, zones: list[str]) -> str | None:
     target = hostname.lower().rstrip(".")
     matches = [zone for zone in zones if target == zone or target.endswith(f".{zone}")]
@@ -84,27 +153,24 @@ def generate_map_entries(services: list[dict[str, Any]]) -> list[str]:
     ]
 
 
-def generate_handler_blocks(services: list[dict[str, Any]]) -> list[str]:
+def generate_handler_blocks(
+    services: list[dict[str, Any]],
+    *,
+    template_dir: Path | None,
+    debug: bool,
+) -> list[str]:
     blocks: list[str] = []
     for svc in sorted(services, key=lambda item: item["fqdn"].lower()):
-        if not svc.get("ignore_tls"):
-            continue
-        fqdn = svc["fqdn"]
-        backend = svc["backend"]
-        label = caddy_handler_label(fqdn)
-        blocks.extend(
-            [
-                f"@{label} host {fqdn}",
-                f"handle @{label} {{",
-                f"    reverse_proxy https://{backend} {{",
-                "        transport http {",
-                "            tls_insecure_skip_verify",
-                "        }",
-                "    }",
-                "}",
-                "",
-            ]
+        template_lines = render_host_template_block_lines(
+            template_dir=template_dir,
+            svc=svc,
+            debug=debug,
         )
+        if not template_lines:
+            continue
+        blocks.extend(template_lines)
+        if blocks and blocks[-1].strip():
+            blocks.append("")
     if blocks and not blocks[-1].strip():
         blocks.pop()
     return blocks
@@ -247,9 +313,7 @@ def generate_server_blocks(
         )
 
         if handler_blocks:
-            block.append(
-                "    # 3. Proxied HTTPS backends (Special case: HTTPS backend + Self-Signed)"
-            )
+            block.append("    # 3. Custom host handlers (template-driven)")
             block.extend(indent_lines(handler_blocks, 4))
             block.append("")
 
@@ -479,9 +543,10 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     parser.add_argument(
-        "--apply",
+        "--_apply",
+        dest="apply",
         action="store_true",
-        help="Copy generated Caddyfile to server and restart Caddy",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--caddy-host",
@@ -510,9 +575,10 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     parser.add_argument(
-        "--debug",
+        "--_debug",
+        dest="debug",
         action="store_true",
-        help="Enable verbose debug output to stderr",
+        help=argparse.SUPPRESS,
     )
 
     args = parser.parse_args(argv)
@@ -580,6 +646,7 @@ def main(argv: list[str] | None = None) -> int:
 
     zone_map_services: dict[str, list[dict[str, Any]]] = {zone: [] for zone in zones}
     zone_handler_services: dict[str, list[dict[str, Any]]] = {zone: [] for zone in zones}
+    host_template_dir = template_path.parent
 
     unmatched: list[str] = []
     for svc in proxy_services:
@@ -587,8 +654,10 @@ def main(argv: list[str] | None = None) -> int:
         if not zone:
             unmatched.append(svc["fqdn"])
             continue
-        zone_map_services.setdefault(zone, []).append(svc)
-        zone_handler_services.setdefault(zone, []).append(svc)
+        if resolve_host_template_path(template_dir=host_template_dir, fqdn=svc["fqdn"]):
+            zone_handler_services.setdefault(zone, []).append(svc)
+        else:
+            zone_map_services.setdefault(zone, []).append(svc)
 
     if unmatched and args.debug:
         for fqdn in unmatched:
@@ -599,7 +668,11 @@ def main(argv: list[str] | None = None) -> int:
     for zone, items in zone_map_services.items():
         map_entries_rendered[zone] = generate_map_entries(items)
     for zone, items in zone_handler_services.items():
-        handler_blocks_rendered[zone] = generate_handler_blocks(items)
+        handler_blocks_rendered[zone] = generate_handler_blocks(
+            items,
+            template_dir=host_template_dir,
+            debug=args.debug,
+        )
 
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S %Z")
     server_blocks = generate_server_blocks(
@@ -689,7 +762,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print("Deployed Caddyfile and restarted Caddy.")
     else:
-        print("Dry run (no --apply): no remote changes made")
+        print("Dry run (apply mode disabled): no remote changes made")
         print(f"- generated: {output_path}")
         if missing_deploy:
             print(
@@ -704,7 +777,7 @@ def main(argv: list[str] | None = None) -> int:
             effective_port = port or 22
             print(f"- would scp: {output_path} -> {target}:{remote_path} (port {effective_port})")
             print(f"- would ssh: {target}: {restart_command}")
-        print("Re-run with --apply to perform these actions.")
+        print("Re-run with global --apply to perform these actions.")
 
     return 0
 

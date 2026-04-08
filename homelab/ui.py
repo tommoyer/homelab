@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import argparse
 import curses
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .commands import COMMANDS
+from .sheets import clear_sheet_df_cache
 
 
 @dataclass
@@ -50,18 +50,6 @@ def _discover_flags(command_name: str, module: object) -> list[FlagConfig]:
     """
     # Common flags we want to expose across tools
     known_flags = {
-        "--apply": FlagConfig(
-            name="--apply",
-            description="Apply changes to remote host",
-            flag_type="bool",
-            default=False,
-        ),
-        "--debug": FlagConfig(
-            name="--debug",
-            description="Enable debug logging",
-            flag_type="bool",
-            default=False,
-        ),
         "--sudo": FlagConfig(
             name="--sudo",
             description="Use sudo when applying",
@@ -78,11 +66,11 @@ def _discover_flags(command_name: str, module: object) -> list[FlagConfig]:
     
     # Map commands to their relevant flags
     command_flag_map = {
-        "pihole": ["--apply", "--debug", "--sudo", "--tailnet"],
-        "dnscontrol": ["--apply", "--debug"],
-        "caddy": ["--apply", "--debug"],
-        "deploy": ["--debug"],
-        "mikrotik": ["--debug"],
+        "pihole": ["--sudo", "--tailnet"],
+        "dnscontrol": [],
+        "caddy": [],
+        "deploy": [],
+        "mikrotik": [],
         "subnet_assign": [],
     }
     
@@ -128,6 +116,19 @@ def _build_menu_entries() -> list[MenuEntry]:
             )
         )
 
+    def _reload_sheets_cache(_argv: list[str] | None = None) -> int:
+        clear_sheet_df_cache()
+        print("Google Sheets cache cleared. Next run will fetch fresh data.")
+        return 0
+
+    entries.append(
+        MenuEntry(
+            name="reload_sheets",
+            description="Clear cached Google Sheets data",
+            runner=_reload_sheets_cache,
+        )
+    )
+
     entries.sort(key=lambda e: e.name)
     return entries
 
@@ -168,7 +169,11 @@ def _main_menu(
         # Apply flag
         prefix = "▶" if selected == 1 else " "
         apply_toggle = "[×]" if global_flags.apply else "[ ]"
-        stdscr.addstr(y, 0, f"{prefix} {apply_toggle} --apply         Apply changes (deploy, pihole, caddy, dnscontrol)")
+        apply_label = (
+            f"{prefix} {apply_toggle} --apply         "
+            "Apply changes (deploy, pihole, caddy, dnscontrol)"
+        )
+        stdscr.addstr(y, 0, apply_label)
         y += 1
         
         stdscr.addstr(y, 0, "─" * min(width - 1, 80))
@@ -349,13 +354,13 @@ def main(argv: list[str] | None = None) -> int:
         command_argv = _build_argv_from_config(config)
         
         # Add global flags if not already present in command-specific flags
-        if global_flags.debug and "--debug" not in command_argv:
-            if selected_entry.name in {"caddy", "mikrotik", "deploy", "pihole", "dnscontrol"}:
-                command_argv.insert(0, "--debug")
+        if global_flags.debug and "--_debug" not in command_argv:
+            if selected_entry.name in {"caddy", "mikrotik", "deploy", "pihole", "dnscontrol", "tailscale_install"}:
+                command_argv.insert(0, "--_debug")
         
-        if global_flags.apply and "--apply" not in command_argv:
-            if selected_entry.name in {"deploy", "pihole", "caddy", "dnscontrol"}:
-                command_argv.insert(0, "--apply")
+        if global_flags.apply and "--_apply" not in command_argv:
+            if selected_entry.name in {"deploy", "pihole", "caddy", "dnscontrol", "tailscale_install"}:
+                command_argv.insert(0, "--_apply")
         
         print(f"\n{'═' * 60}")
         print(f"Running: {selected_entry.name} {' '.join(command_argv)}")

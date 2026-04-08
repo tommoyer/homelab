@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .config import get_config_value, get_table, load_toml_or_exit, pre_parse_config
+from .config import get_config_value, get_table, pre_parse_config
 from .logging_utils import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -42,18 +42,18 @@ def add_debug_argument(
     parser: argparse.ArgumentParser,
     default: bool = False,
 ) -> None:
-    """Add standard --debug/-d argument to parser.
+    """Add internal debug forwarding argument to parser.
 
     Args:
         parser: ArgumentParser instance to modify
         default: Default debug value (typically from config)
     """
     parser.add_argument(
-        "--debug",
-        "-d",
+        "--_debug",
+        dest="debug",
         action="store_true",
         default=default,
-        help="Enable debug logging",
+        help=argparse.SUPPRESS,
     )
 
 
@@ -62,7 +62,7 @@ def add_apply_argument(
     default: bool = False,
     help_text: str = "Apply changes to remote host via SSH",
 ) -> None:
-    """Add standard --apply argument to parser.
+    """Add internal apply forwarding argument to parser.
 
     Args:
         parser: ArgumentParser instance to modify
@@ -70,10 +70,11 @@ def add_apply_argument(
         help_text: Help text for the --apply argument
     """
     parser.add_argument(
-        "--apply",
+        "--_apply",
+        dest="apply",
         action="store_true",
         default=default,
-        help=help_text,
+        help=argparse.SUPPRESS,
     )
 
 
@@ -161,7 +162,7 @@ def bootstrap_config_and_logging(
     # Pre-parse debug flag to configure logging before building parser
     debug = False
     if argv:
-        debug = "--debug" in argv or "-d" in argv
+        debug = "--_debug" in argv
 
     configure_logging(debug=debug)
 
