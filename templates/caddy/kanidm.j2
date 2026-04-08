@@ -1,0 +1,10 @@
+@{{ handler_label }} host {{ fqdn }}
+handle @{{ handler_label }} {
+	reverse_proxy https://{{ backend }} {
+		transport http {
+			tls
+			tls_server_name {{ fqdn }}
+			tls_insecure_skip_verify
+		}
+	}
+}

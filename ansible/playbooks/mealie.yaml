@@ -1,0 +1,26 @@
+---
+- name: Configure Mealie OIDC environment
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars_files:
+    # ansible-vault encrypted; must define caddy_cf_api_token
+    - "{{ playbook_dir }}/../inventory/group_vars/all/vault.yaml"
+
+  tasks:
+    - name: Ensure /opt/mealie directory exists
+      ansible.builtin.file:
+        path: /opt/mealie
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Deploy Mealie environment file
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/mealie.env.j2"
+        dest: /opt/mealie/mealie.env
+        owner: root
+        group: root
+        mode: '0640'

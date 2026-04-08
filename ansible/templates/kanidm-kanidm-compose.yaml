@@ -1,0 +1,13 @@
+services:
+  kanidm:
+    image: kanidm/server:{{ kanidm_image_tag | default('latest') }}
+    container_name: kanidm
+    restart: "{{ service_restart_policy | default('unless-stopped') }}"
+    command: ["kanidmd", "server", "-c", "/data/server.toml"]
+    volumes:
+      - {{ compose_base_dir | default('/home/ansible') }}/kanidm/data:/data
+    ports:
+      - "443:8443"
+      - "636:3636"
+    env_file:
+      - .env

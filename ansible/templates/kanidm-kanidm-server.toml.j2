@@ -1,0 +1,47 @@
+version = "2"
+
+domain = "{{ kanidm_domain | default('kanidm.moyer.wtf') }}"
+origin = "https://{{ kanidm_domain | default('kanidm.moyer.wtf') }}"
+
+log_level = "{{ kanidm_log_level | default('info') }}"
+
+db_path = "{{ kanidm_db_path | default('/data/kanidm.db') }}"
+db_fs_type = "{{ kanidm_db_fs_type | default('generic') }}"
+db_arc_size = {{ kanidm_db_arc_size | default('2048') | int }}
+
+{% if kanidm_server_admin_bind_path is defined and kanidm_server_admin_bind_path | trim %}
+adminbindpath = "{{ kanidm_server_admin_bind_path }}"
+{% endif %}
+
+tls_chain = "{{ kanidm_tls_chain | default('/data/certs/chain.pem') }}"
+tls_key = "{{ kanidm_tls_key | default('/data/certs/key.pem') }}"
+{% if kanidm_tls_client_ca is defined and kanidm_tls_client_ca | trim %}
+tls_client_ca = "{{ kanidm_tls_client_ca }}"
+{% endif %}
+
+bindaddress = "{{ kanidm_bindaddress | default('0.0.0.0:8443') }}"
+ldapbindaddress = "{{ kanidm_ldapbindaddress | default('0.0.0.0:3636') }}"
+
+{% if kanidm_otel_grpc_url is defined and kanidm_otel_grpc_url | trim %}
+otel_grpc_url = "{{ kanidm_otel_grpc_url }}"
+{% endif %}
+
+{% if (kanidm_replication_origin is defined and kanidm_replication_origin | trim) or
+      (kanidm_replication_bindaddress is defined and kanidm_replication_bindaddress | trim) or
+      (kanidm_replication_task_poll_interval is defined and kanidm_replication_task_poll_interval | trim) %}
+[replication]
+{% if kanidm_replication_origin is defined and kanidm_replication_origin | trim %}
+origin = "{{ kanidm_replication_origin }}"
+{% endif %}
+{% if kanidm_replication_bindaddress is defined and kanidm_replication_bindaddress | trim %}
+bindaddress = "{{ kanidm_replication_bindaddress }}"
+{% endif %}
+{% if kanidm_replication_task_poll_interval is defined and kanidm_replication_task_poll_interval | trim %}
+task_poll_interval = {{ kanidm_replication_task_poll_interval | int }}
+{% endif %}
+{% endif %}
+
+[online_backup]
+path = "{{ kanidm_online_backup_path | default('/data/backup') }}"
+versions = {{ kanidm_online_backup_versions | default('5') | int }}
+schedule = "{{ kanidm_online_backup_schedule | default('0 3 * * *') }}"

@@ -28,25 +28,6 @@ python -m homelab --apply run --pihole --caddy
 python -m homelab --debug run --all
 ```
 
-### Per-Command Flags (Still Supported)
-
-```bash
-# Old way still works for backward compatibility
-python -m homelab deploy hostname --apply --debug
-python -m homelab pihole --apply
-```
-
-## Flag Support by Command
-
-| Command | --debug | --apply |
-|---------|---------|---------|
-| `deploy` | ✅ | ✅ |
-| `pihole` | ✅ | ✅ |
-| `caddy` | ✅ | ✅ |
-| `dnscontrol` | ✅ | ✅ |
-| `mikrotik` | ✅ | ❌ |
-| `subnet_assign` | ❌ | ❌ |
-
 ## Implementation Details
 
 ### Flag Forwarding
@@ -55,17 +36,17 @@ The CLI automatically forwards global flags to subcommands:
 
 1. **Parse global flags** before the command name
 2. **Forward to subcommand** if the command supports it
-3. **Preserve per-command flags** if explicitly provided
+3. **Reject per-command usage** of `--debug` / `--apply`
 
-### Priority Rules
+### Rules
 
-- **Per-command flags take precedence** over global flags
-- If `--apply` appears in both places, only one is forwarded
-- Global flags are inserted at the beginning of command arguments
+- `--debug` and `--apply` are **global-only** flags
+- They must appear before the command name
+- If passed after a command, the CLI returns an error
 
 ### Run Mode
 
-The `run` mode now accepts global `--apply`:
+The `run` mode uses only global `--apply`:
 
 ```bash
 # Apply all features
@@ -80,7 +61,7 @@ python -m homelab --debug --apply run --pihole --dnscontrol
 ✅ **Consistency**: Same flags work everywhere  
 ✅ **Convenience**: No need to remember which commands support which flags  
 ✅ **Clarity**: Flags before command makes intent clear  
-✅ **Backward compatible**: Old per-command flags still work
+✅ **Strictness**: One clear way to pass shared execution flags
 
 ## Examples
 
@@ -121,9 +102,3 @@ python -m homelab --debug --apply deploy hostname
 ```bash
 python -m homelab --debug --apply deploy hostname
 ```
-
-**Or keep using per-command flags** - both work!
-
----
-
-**Introduced in**: PR #9 (fix/deploy-ui-and-mkdir branch)

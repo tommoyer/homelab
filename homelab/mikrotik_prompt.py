@@ -34,8 +34,9 @@ ADDRESS_LIST_BACKEND_PREFIX = "hlb-backend"
 DHCP_MAC_PREFIX = "BC:24:11"
 
 
-def _backend_group_list_name(protocol: str, backend_port: int) -> str:
-    return f"{ADDRESS_LIST_BACKEND_PREFIX}-{protocol}-{backend_port}"
+def _backend_group_list_name(protocol: str | None, backend_port: int) -> str:
+    protocol_part = protocol.strip().lower() if protocol else "any"
+    return f"{ADDRESS_LIST_BACKEND_PREFIX}-{protocol_part}-{backend_port}"
 
 
 def _generate_random_mac(prefix: str = DHCP_MAC_PREFIX) -> str:
@@ -67,7 +68,7 @@ class ServiceFormData:
     service_key: str = ""
     service_name: str = ""
     hostname: str = ""
-    protocol: str = "tcp"
+    protocol: str = ""
     ingress: str = "dstnat"
     exposure: str = "public"
     frontend_ports: str = ""
@@ -92,7 +93,7 @@ class ParsedInput:
     hostname: str
     ingress: str
     exposure: str
-    protocol: str
+    protocol: str | None
     frontend_ports: list[int]
     backend_ports: list[int]
     backend_ip: str | None
@@ -214,7 +215,7 @@ def _build_selection_options(
     vlan_options = sorted(vlan_map.keys(), key=str.casefold)
 
     return {
-        "protocol": helper_protocols,
+        "protocol": ["", *helper_protocols],
         "ingress": ["dstnat", "direct", "caddy"],
         "exposure": ["public", "non-public"],
         "source_vlan": ["", *vlan_options],
@@ -286,7 +287,7 @@ def _prefill_candidates_from_services_sheet(
                 "service_name": as_str(row.get("service_name")),
                 "frontend_hostname": as_str(row.get("frontend_hostname")),
                 "hostname": as_str(row.get("hostname")),
-                "protocol": as_str(row.get("protocol")).lower() or "tcp",
+                "protocol": as_str(row.get("protocol")).lower(),
                 "ingress": as_str(row.get("ingress")).lower() or "dstnat",
                 "exposure": as_str(row.get("exposure")).lower() or "public",
                 "frontend_ports": _ports_to_form_value(row.get("frontend_port")),
@@ -503,20 +504,21 @@ def _run_single_input_prompt(initial_service_key: str) -> str:
     return curses.wrapper(_inner)
 
 
-def _run_service_selection_menu(*, services: list[str]) -> str:
+def _run_service_selection_menu(*, services: list[str]) -> list[str]:
     options = [*services, "New..."]
 
-    def _inner(stdscr: Any) -> str:
+    def _inner(stdscr: Any) -> list[str]:
         curses.curs_set(0)
         selected_idx = 0
         scroll = 0
+        selected_indices: set[int] = set()
 
         while True:
             stdscr.clear()
             height, width = stdscr.getmaxyx()
             stdscr.addstr(0, 0, "MikroTik single-service generator")
-            stdscr.addstr(1, 0, "Select service from Services sheet (Enter)")
-            stdscr.addstr(2, 0, "Use ↑/↓ to navigate")
+            stdscr.addstr(1, 0, "Select one or more services from Services sheet")
+            stdscr.addstr(2, 0, "Use ↑/↓ navigate, Space toggle, Enter confirm")
 
             visible_rows = max(1, height - 5)
             if selected_idx < scroll:
@@ -529,8 +531,11 @@ def _run_service_selection_menu(*, services: list[str]) -> str:
                 if option_idx >= len(options):
                     break
                 option = options[option_idx]
-                prefix = ">" if option_idx == selected_idx else " "
-                text = f"{prefix} {option}"
+                cursor = ">" if option_idx == selected_idx else " "
+                marker = "[x]" if option_idx in selected_indices else "[ ]"
+                if option == "New...":
+                    marker = "[+]"
+                text = f"{cursor} {marker} {option}"
                 stdscr.addstr(4 + row_idx, 0, text[: max(1, width - 1)])
 
             ch = stdscr.getch()
@@ -540,8 +545,19 @@ def _run_service_selection_menu(*, services: list[str]) -> str:
             if ch == curses.KEY_DOWN:
                 selected_idx = (selected_idx + 1) % len(options)
                 continue
+            if ch == ord(" "):
+                if selected_idx < len(services):
+                    if selected_idx in selected_indices:
+                        selected_indices.remove(selected_idx)
+                    else:
+                        selected_indices.add(selected_idx)
+                continue
             if ch in {10, 13}:
-                return options[selected_idx]
+                if selected_indices:
+                    return [services[i] for i in range(len(services)) if i in selected_indices]
+                if selected_idx == len(options) - 1:
+                    return ["New..."]
+                return [options[selected_idx]]
 
     return curses.wrapper(_inner)
 
@@ -692,43 +708,53 @@ def _run_form_ui(
     return curses.wrapper(_inner)
 
 
-def _run_confirmation_ui(form_data: ServiceFormData) -> bool:
-    lines = [
-        "Review configuration before generation",
-        "Press y to confirm, n to cancel",
-        "",
-    ]
-
-    for key in [
-        "service_name",
-        "hostname",
-        "protocol",
-        "ingress",
-        "exposure",
-        "frontend_ports",
-        "backend_ports",
-        "backend_ip",
-        "source_ip",
-        "source_address_list",
-        "source_vlan",
-        "destination_vlan",
-        "destination_address_list",
-        "enable_nat",
-        "enable_filter",
-        "enable_dhcp",
-        "dhcp_mac",
-        "dhcp_address",
-        "dhcp_subnet",
-    ]:
-        lines.append(f"- {key}: {getattr(form_data, key)}")
+def _run_batch_confirmation_ui(forms: list[ServiceFormData]) -> bool:
+    if not forms:
+        return False
 
     def _inner(stdscr: Any) -> bool:
         curses.curs_set(0)
+        scroll = 0
+
         while True:
             stdscr.clear()
-            for i, line in enumerate(lines):
-                stdscr.addstr(i, 0, line)
+            height, width = stdscr.getmaxyx()
+
+            lines = [
+                "Review selected services before generation",
+                "Press y to generate all, n to cancel",
+                "Use ↑/↓ to scroll",
+                "",
+            ]
+
+            for idx, form in enumerate(forms, start=1):
+                service_name = form.service_name.strip() or form.service_key.strip() or "service"
+                summary = (
+                    f"[{idx}] service={service_name} "
+                    f"host={form.hostname.strip()} ingress={form.ingress.strip() or 'dstnat'} "
+                    f"protocol={form.protocol.strip() or 'any'} "
+                    f"frontend={form.frontend_ports.strip()} backend={form.backend_ports.strip()}"
+                )
+                lines.append(summary)
+
+            visible_rows = max(1, height - 1)
+            max_scroll = max(0, len(lines) - visible_rows)
+            if scroll > max_scroll:
+                scroll = max_scroll
+
+            for row in range(visible_rows):
+                line_idx = scroll + row
+                if line_idx >= len(lines):
+                    break
+                stdscr.addstr(row, 0, lines[line_idx][: max(1, width - 1)])
+
             ch = stdscr.getch()
+            if ch == curses.KEY_UP:
+                scroll = max(0, scroll - 1)
+                continue
+            if ch == curses.KEY_DOWN:
+                scroll = min(max_scroll, scroll + 1)
+                continue
             if ch in {ord('y'), ord('Y')}:
                 return True
             if ch in {ord('n'), ord('N')}:
@@ -752,8 +778,12 @@ def _normalize_form(
     source_cfg = vlan_map.get(source_vlan, {}) if source_vlan else {}
     destination_cfg = vlan_map.get(destination_vlan, {}) if destination_vlan else {}
 
-    protocol = form_data.protocol.strip().lower()
-    if protocol not in {"tcp", "udp"}:
+    protocol_raw = form_data.protocol.strip().lower()
+    if not protocol_raw:
+        protocol: str | None = None
+    elif protocol_raw in {"tcp", "udp"}:
+        protocol = protocol_raw
+    else:
         protocol = "tcp"
 
     ingress = form_data.ingress.strip().lower()
@@ -848,7 +878,7 @@ def _render_commands(parsed: ParsedInput) -> list[str]:
             list_name = _backend_group_list_name(parsed.protocol, backend_port)
             comment = (
                 f"{COMMENT_MARKER}; backend-group; "
-                f"{parsed.protocol}:{backend_port}"
+                f"{(parsed.protocol or 'any')}:{backend_port}"
             )
             commands.append(
                 "/ip firewall address-list add "
@@ -859,18 +889,41 @@ def _render_commands(parsed: ParsedInput) -> list[str]:
     # --- dstnat NAT rules ---
     # Only for public, non-caddy services (caddy dstnat is in caddy-dstnat.rsc).
     # ingress=direct or ingress=dstnat with exposure=public.
-    if parsed.enable_nat and parsed.backend_ip and mappings:
+    # Router-targeted direct/public services always require explicit
+    # per-service WAN dstnat rules in the service .rsc output.
+    should_generate_router_direct_nat = (
+        parsed.ingress == "direct"
+        and is_public
+        and parsed.use_input_chain
+    )
+
+    if (parsed.enable_nat or should_generate_router_direct_nat) and parsed.backend_ip and mappings:
         for frontend_port, backend_port in mappings:
-            comment = (
-                f"{COMMENT_MARKER}; dstnat; "
-                f"{parsed.protocol}:{frontend_port}->{backend_port}"
-            )
-            commands.append(
-                "/ip firewall nat add chain=dstnat action=dst-nat "
-                f"in-interface-list=WAN protocol={parsed.protocol} dst-port={frontend_port} "
-                f"to-addresses={parsed.backend_ip} to-ports={backend_port} "
-                f"comment={mikrotik_quote(comment)}"
-            )
+            is_router_direct_public = should_generate_router_direct_nat
+            if is_router_direct_public:
+                comment = (
+                    f"{COMMENT_MARKER}; router-dstnat; "
+                    f"WAN:{frontend_port}->{parsed.backend_ip}:{backend_port}"
+                )
+            else:
+                comment = (
+                    f"{COMMENT_MARKER}; dstnat; "
+                    f"{(parsed.protocol or 'any')}:{frontend_port}->{backend_port}"
+                )
+
+            nat_parts = [
+                "/ip firewall nat add chain=dstnat action=dst-nat",
+                "in-interface-list=WAN",
+            ]
+            if parsed.protocol:
+                nat_parts.append(f"protocol={parsed.protocol}")
+            nat_parts.extend([
+                f"dst-port={frontend_port}",
+                f"to-addresses={parsed.backend_ip}",
+                f"to-ports={backend_port}",
+                f"comment={mikrotik_quote(comment)}",
+            ])
+            commands.append(" ".join(nat_parts))
 
     # --- Firewall filter rules ---
     if parsed.enable_filter and parsed.backend_ip:
@@ -883,9 +936,10 @@ def _render_commands(parsed: ParsedInput) -> list[str]:
             backend_list = _backend_group_list_name(parsed.protocol, int(backend_port))
             parts = [
                 f"/ip firewall filter add chain={chain} action=accept",
-                f"protocol={parsed.protocol}",
                 f"dst-port={backend_port}",
             ]
+            if parsed.protocol:
+                parts.insert(1, f"protocol={parsed.protocol}")
             # For input-chain rules the dst is the router itself, so
             # dst-address-list is not meaningful; for forward, reference
             # the backend address-list.
@@ -917,7 +971,7 @@ def _render_commands(parsed: ParsedInput) -> list[str]:
 
             comment = (
                 f"{COMMENT_MARKER}; {chain}; "
-                f"{parsed.protocol}:{backend_port}"
+                f"{(parsed.protocol or 'any')}:{backend_port}"
             )
             parts.append(f"comment={mikrotik_quote(comment)}")
 
@@ -998,9 +1052,9 @@ def _build_parser(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m homelab mikrotik",
         description=(
-            "Prompt-driven single-service MikroTik generator. Loads defaults from config and "
-            "Google Sheets, opens a curses form, then shows a curses confirmation screen before "
-            "printing/writing RouterOS commands."
+            "Prompt-driven MikroTik generator. Loads defaults from config and Google Sheets, "
+            "supports single or batch service processing, opens curses forms, then shows a "
+            "confirmation screen before printing/writing RouterOS commands."
         ),
     )
     parser.add_argument("--config", type=Path, default=config_path)
@@ -1049,7 +1103,12 @@ def _build_parser(argv: list[str] | None = None) -> argparse.Namespace:
         default=caddy_ip_default,
         help="Caddy proxy IP or hostname (resolved from Nodes sheet) used when ingress=caddy",
     )
-    parser.add_argument("--service", default="", help="Optional service key to pre-select")
+    parser.add_argument(
+        "--service",
+        action="append",
+        default=[],
+        help="Optional service key to process (repeat to process multiple services)",
+    )
     parser.add_argument(
         "--no-prompt",
         action="store_true",
@@ -1073,7 +1132,7 @@ def _build_parser(argv: list[str] | None = None) -> argparse.Namespace:
         help="Directory where per-service .rsc files are written",
     )
     parser.add_argument("--stdout", action="store_true", help="Also print generated commands to stdout")
-    parser.add_argument("--debug", action="store_true", default=False)
+    parser.add_argument("--_debug", dest="debug", action="store_true", default=False, help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
 
@@ -1191,13 +1250,29 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             logger.warning("Unable to load Nodes sheet hostname options: %s", exc)
 
-    service_key = str(args.service or "").strip()
-    selection_source = "--service"
-    if args.no_prompt and not service_key:
-        print("Error: --no-prompt requires --service.", file=sys.stderr)
+    service_values = [str(value).strip() for value in list(args.service or []) if str(value).strip()]
+    selected_services: list[tuple[str, str]] = []
+    seen_service_keys: set[str] = set()
+
+    def _add_selected_service(service_key: str, source: str) -> None:
+        normalized = service_key.strip()
+        if not normalized:
+            return
+        dedupe_key = normalized.casefold()
+        if dedupe_key in seen_service_keys:
+            return
+        seen_service_keys.add(dedupe_key)
+        selected_services.append((normalized, source))
+
+    if service_values:
+        for service_value in service_values:
+            _add_selected_service(service_value, "--service")
+
+    if args.no_prompt and not selected_services:
+        print("Error: --no-prompt requires at least one --service.", file=sys.stderr)
         return 2
 
-    if not service_key:
+    if not selected_services:
         service_options: list[str] = []
         try:
             service_options = _list_services_from_sheet(
@@ -1209,100 +1284,20 @@ def main(argv: list[str] | None = None) -> int:
             logger.warning("Unable to load Services sheet for menu: %s", exc)
 
         if service_options:
-            selection = _run_service_selection_menu(services=service_options)
-            if selection == "New...":
-                service_key = _run_single_input_prompt("")
-                selection_source = "new"
+            selections = _run_service_selection_menu(services=service_options)
+            if selections == ["New..."]:
+                manual_service_key = _run_single_input_prompt("")
+                _add_selected_service(manual_service_key, "new")
             else:
-                service_key = selection
-                selection_source = "sheet"
+                for service in selections:
+                    _add_selected_service(service, "sheet")
         else:
-            service_key = _run_single_input_prompt("")
-            selection_source = "new"
+            manual_service_key = _run_single_input_prompt("")
+            _add_selected_service(manual_service_key, "new")
 
-    if not service_key:
-        print("Error: service key is required", file=sys.stderr)
+    if not selected_services:
+        print("Error: at least one service key is required", file=sys.stderr)
         return 2
-
-    prefill: dict[str, str | Any] = {}
-    try:
-        service_matches = _prefill_candidates_from_services_sheet(
-            sheet_url=str(args.sheet_url),
-            services_gid=int(args.services_gid),
-            timeout_seconds=float(args.sheet_timeout),
-            service_key=service_key,
-        )
-
-        if args.no_prompt:
-            target = service_key.strip().lower()
-            frontend_matches = [
-                match
-                for match in service_matches
-                if str(match.get("frontend_hostname") or "").strip().lower() == target
-            ]
-            if len(frontend_matches) > 1:
-                if not sys.stdin.isatty():
-                    print(
-                        (
-                            f"Error: multiple services found for frontend hostname '{service_key}' "
-                            "and stdin is not interactive to select one."
-                        ),
-                        file=sys.stderr,
-                    )
-                    return 1
-                prefill = _prompt_select_service_by_name(
-                    service_key=service_key,
-                    matches=frontend_matches,
-                )
-            elif len(frontend_matches) == 1:
-                prefill = frontend_matches[0]
-            elif service_matches:
-                prefill = service_matches[0]
-        elif service_matches:
-            prefill = service_matches[0]
-    except Exception as exc:
-        logger.warning("Unable to load services sheet prefill: %s", exc)
-
-    if args.no_prompt and not prefill:
-        print(
-            f"Error: service '{service_key}' not found in Services sheet (required for --no-prompt).",
-            file=sys.stderr,
-        )
-        return 1
-
-    form = ServiceFormData(service_key=service_key)
-
-    for key, value in prefill.items():
-        if hasattr(form, key) and value:
-            setattr(form, key, value)
-
-    try:
-        nodes_prefill = _prefill_from_nodes_sheet(
-            sheet_url=str(args.sheet_url),
-            nodes_gid=int(args.nodes_gid),
-            timeout_seconds=float(args.sheet_timeout),
-            hostname=form.hostname,
-            lease_type_column=lease_type_column,
-            ip_column=ip_column,
-            subnet_column=subnet_column,
-            mac_column=mac_column,
-        )
-        for key, value in nodes_prefill.items():
-            if hasattr(form, key) and value:
-                setattr(form, key, value)
-    except Exception as exc:
-        logger.warning("Unable to load nodes sheet prefill: %s", exc)
-
-    if not args.no_prompt:
-        form = _run_form_ui(
-            form,
-            title=f"MikroTik single-service form ({service_key}) [source: {selection_source}]",
-            selection_options=selection_options,
-        )
-        confirmed = _run_confirmation_ui(form)
-        if not confirmed:
-            print("Aborted")
-            return 130
 
     # Read input_chain_hosts from config — hostnames whose services use
     # the INPUT chain (router/switch management UIs) instead of FORWARD.
@@ -1319,76 +1314,212 @@ def main(argv: list[str] | None = None) -> int:
         get_config_value(fw_cfg, "place_before_input_rule_comment", "")
     ).strip() or None
 
-    parsed = _normalize_form(
-        form,
-        vlan_map,
-        caddy_ip=caddy_ip_resolved or "",
-        input_chain_hosts=input_chain_hosts,
-        place_before_filter_comment=place_before_filter_comment,
-        place_before_input_comment=place_before_input_comment,
-    )
-
-    if parsed.enable_dhcp and parsed.dhcp_address and not parsed.dhcp_mac:
-        parsed.dhcp_mac = _generate_random_mac()
-        print(
-            f"DHCP MAC not provided; generated random MAC {parsed.dhcp_mac}",
-            file=sys.stderr,
-        )
-
-    commands = _render_commands(parsed)
-
-    if not commands:
-        print("No commands generated (check enabled sections and required fields).", file=sys.stderr)
-        return 1
-
-    timestamp = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    lines = [
-        f"# {COMMENT_MARKER}",
-        f"# generated_at={timestamp}",
-        f"# service={parsed.service_name}",
-        "# address-list convention:",
-        f"#   caddy hosts: {ADDRESS_LIST_CADDY_HOSTS}",
-        f"#   backend groups: {ADDRESS_LIST_BACKEND_PREFIX}-<protocol>-<backend_port>",
-        "# onboarding guidance:",
-        "#   add/maintain caddy nodes:",
-        (
-            f"#     /ip firewall address-list add list={ADDRESS_LIST_CADDY_HOSTS} "
-            'address=<CADDY_IP> comment="manual caddy node"'
-        ),
-        "#   add/maintain backend services:",
-        (
-            f"#     /ip firewall address-list add "
-            f"list={ADDRESS_LIST_BACKEND_PREFIX}-<protocol>-<backend_port> "
-            'address=<SERVICE_IP> comment="manual backend service"'
-        ),
-        "",
-        *commands,
-        "",
-    ]
-    content = "\n".join(lines)
-
     output_base = resolve_path_relative_to_config(
         Path(args.config).expanduser().resolve(),
         Path(args.output),
     )
     output_dir = output_base.parent if output_base.suffix else output_base
-    output_filename = f"{_normalized_service_filename(parsed.service_name)}.rsc"
-    output_path = output_dir / output_filename
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(content, encoding="utf-8")
-    print(f"Wrote {output_path}")
 
-    if args.stdout:
-        print(content)
+    successes: list[Path] = []
+    failures: list[tuple[str, str]] = []
+    generated_filenames: set[str] = set()
+    prepared_services: list[tuple[str, ServiceFormData]] = []
 
-    # Write shared caddy-dstnat.rsc when a Caddy IP is configured.
-    if caddy_ip_resolved:
+    total_services = len(selected_services)
+    for service_index, (service_key, selection_source) in enumerate(selected_services, start=1):
+        prefill: dict[str, str | Any] = {}
+        try:
+            service_matches = _prefill_candidates_from_services_sheet(
+                sheet_url=str(args.sheet_url),
+                services_gid=int(args.services_gid),
+                timeout_seconds=float(args.sheet_timeout),
+                service_key=service_key,
+            )
+
+            if args.no_prompt:
+                target = service_key.strip().lower()
+                frontend_matches = [
+                    match
+                    for match in service_matches
+                    if str(match.get("frontend_hostname") or "").strip().lower() == target
+                ]
+                if len(frontend_matches) > 1:
+                    if not sys.stdin.isatty():
+                        failures.append(
+                            (
+                                service_key,
+                                (
+                                    f"multiple services found for frontend hostname '{service_key}' "
+                                    "and stdin is not interactive to select one"
+                                ),
+                            )
+                        )
+                        continue
+                    prefill = _prompt_select_service_by_name(
+                        service_key=service_key,
+                        matches=frontend_matches,
+                    )
+                elif len(frontend_matches) == 1:
+                    prefill = frontend_matches[0]
+                elif service_matches:
+                    prefill = service_matches[0]
+            elif service_matches:
+                prefill = service_matches[0]
+        except Exception as exc:
+            logger.warning("Unable to load services sheet prefill for %s: %s", service_key, exc)
+
+        if args.no_prompt and not prefill:
+            failures.append(
+                (
+                    service_key,
+                    "service not found in Services sheet (required for --no-prompt)",
+                )
+            )
+            continue
+
+        form = ServiceFormData(service_key=service_key)
+
+        for key, value in prefill.items():
+            if hasattr(form, key) and value:
+                setattr(form, key, value)
+
+        try:
+            nodes_prefill = _prefill_from_nodes_sheet(
+                sheet_url=str(args.sheet_url),
+                nodes_gid=int(args.nodes_gid),
+                timeout_seconds=float(args.sheet_timeout),
+                hostname=form.hostname,
+                lease_type_column=lease_type_column,
+                ip_column=ip_column,
+                subnet_column=subnet_column,
+                mac_column=mac_column,
+            )
+            for key, value in nodes_prefill.items():
+                if hasattr(form, key) and value:
+                    setattr(form, key, value)
+        except Exception as exc:
+            logger.warning("Unable to load nodes sheet prefill for %s: %s", service_key, exc)
+
+        if not args.no_prompt:
+            form = _run_form_ui(
+                form,
+                title=(
+                    f"MikroTik service form ({service_index}/{total_services}) "
+                    f"{service_key} [source: {selection_source}]"
+                ),
+                selection_options=selection_options,
+            )
+        prepared_services.append((service_key, form))
+
+    if not prepared_services:
+        for service_key, reason in failures:
+            print(f"Failed service '{service_key}': {reason}", file=sys.stderr)
+        print(
+            f"Processed {len(selected_services)} service(s): "
+            f"{len(successes)} succeeded, {len(failures)} failed"
+        )
+        return 1
+
+    if not args.no_prompt:
+        confirmed = _run_batch_confirmation_ui([form for _, form in prepared_services])
+        if not confirmed:
+            print("Aborted")
+            return 130
+
+    for service_key, form in prepared_services:
+
+        parsed = _normalize_form(
+            form,
+            vlan_map,
+            caddy_ip=caddy_ip_resolved or "",
+            input_chain_hosts=input_chain_hosts,
+            place_before_filter_comment=place_before_filter_comment,
+            place_before_input_comment=place_before_input_comment,
+        )
+
+        if parsed.enable_dhcp and parsed.dhcp_address and not parsed.dhcp_mac:
+            parsed.dhcp_mac = _generate_random_mac()
+            print(
+                f"DHCP MAC not provided for '{service_key}'; generated random MAC {parsed.dhcp_mac}",
+                file=sys.stderr,
+            )
+
+        commands = _render_commands(parsed)
+
+        if not commands:
+            failures.append(
+                (
+                    service_key,
+                    "no commands generated (check enabled sections and required fields)",
+                )
+            )
+            continue
+
+        timestamp = _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        lines = [
+            f"# {COMMENT_MARKER}",
+            f"# generated_at={timestamp}",
+            f"# service={parsed.service_name}",
+            "# address-list convention:",
+            f"#   caddy hosts: {ADDRESS_LIST_CADDY_HOSTS}",
+            f"#   backend groups: {ADDRESS_LIST_BACKEND_PREFIX}-<protocol>-<backend_port>",
+            "# onboarding guidance:",
+            "#   add/maintain caddy nodes:",
+            (
+                f"#     /ip firewall address-list add list={ADDRESS_LIST_CADDY_HOSTS} "
+                'address=<CADDY_IP> comment="manual caddy node"'
+            ),
+            "#   add/maintain backend services:",
+            (
+                f"#     /ip firewall address-list add "
+                f"list={ADDRESS_LIST_BACKEND_PREFIX}-<protocol>-<backend_port> "
+                'address=<SERVICE_IP> comment="manual backend service"'
+            ),
+            "",
+            *commands,
+            "",
+        ]
+        content = "\n".join(lines)
+
+        output_filename = f"{_normalized_service_filename(parsed.service_name)}.rsc"
+        if output_filename.casefold() in generated_filenames:
+            failures.append(
+                (
+                    service_key,
+                    f"output filename collision for '{output_filename}' in current batch",
+                )
+            )
+            continue
+        generated_filenames.add(output_filename.casefold())
+
+        output_path = output_dir / output_filename
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(content, encoding="utf-8")
+        print(f"Wrote {output_path}")
+        successes.append(output_path)
+
+        if args.stdout:
+            print(content)
+
+    if successes and caddy_ip_resolved:
         caddy_dstnat_content = _render_caddy_dstnat(caddy_ip_resolved)
         caddy_dstnat_path = output_dir / "caddy-dstnat.rsc"
         caddy_dstnat_path.parent.mkdir(parents=True, exist_ok=True)
         caddy_dstnat_path.write_text(caddy_dstnat_content, encoding="utf-8")
         print(f"Wrote {caddy_dstnat_path}")
 
+    for service_key, reason in failures:
+        print(f"Failed service '{service_key}': {reason}", file=sys.stderr)
+
+    print(
+        f"Processed {len(selected_services)} service(s): "
+        f"{len(successes)} succeeded, {len(failures)} failed"
+    )
+
+    if failures:
+        return 1
+    if not successes:
+        return 1
     return 0
 
 
