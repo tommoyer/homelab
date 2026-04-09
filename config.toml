@@ -96,6 +96,10 @@ proxmox_helper_script_url = "https://raw.githubusercontent.com/community-scripts
 template = "./templates/pihole/pihole.toml.j2"
 output = "./generated/pihole/pihole.toml"
 
+# Zone used when generating trusted exposure aliases from Services rows:
+#   <frontend_hostname>.<trusted_zone>
+trusted_zone = "moyer.wtf"
+
 # Pi-hole instance SSH settings (used with --apply)
 pihole_user = "root"
 pihole_host = "pihole"

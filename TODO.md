@@ -8,9 +8,5 @@
 - Kid Control script
 - Gitea Action runner
 - Backups for all services
-
-# Things to fix/update
-
-- Network configuration scripts
-- Remove all things Shday VLAN
-- Reconfigure plugs for Hivemind
+- Ansible for OIDC configuration templates for each service
+- Backup ODIC setup scripts from Kanidm container

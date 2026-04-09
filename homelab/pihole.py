@@ -57,6 +57,10 @@ def _toml_string_array(values: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _first_hostname_label(value: object) -> str:
+    return as_str(value).lower().strip().rstrip(".").split(".")[0]
+
+
 def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     """Build argument parser for pihole tool using cli_common utilities."""
     repo_root = Path(__file__).resolve().parents[1]
@@ -141,6 +145,15 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
         ),
     )
 
+    parser.add_argument(
+        "--trusted-zone",
+        default=get_config_value(tool_cfg, "trusted_zone", "moyer.wtf"),
+        help=(
+            "DNS zone for trusted exposure aliases (e.g. 'moyer.wtf'). "
+            "Trusted services use <frontend_hostname>.<trusted_zone>."
+        ),
+    )
+
     add_apply_argument(
         parser,
         help_text=(
@@ -160,6 +173,7 @@ def render_config(
     template_path: Path,
     caddy_host: str,
     tailnet_domain: str,
+    trusted_zone: str,
     trace_hostname: str | None = None,
     debug: bool = False,
 ) -> str:
@@ -272,6 +286,9 @@ def render_config(
     logger.debug("pihole: a_records=%d", len(a_records))
 
     services_df = df_with_normalized_columns(services_df)
+    caddy_label = _first_hostname_label(caddy_host)
+    trusted_zone = as_str(trusted_zone).lower().strip().rstrip(".")
+    tailnet_domain = as_str(tailnet_domain).lower().strip().rstrip(".")
 
     service_cname_candidates: dict[str, list[tuple[str, str, bool, str]]] = defaultdict(list)
     for service_idx, row in services_df.iterrows():
@@ -280,16 +297,73 @@ def render_config(
         frontend_hostname = as_str(row.get("frontend_hostname")).lower().rstrip(".")
         if not frontend_hostname:
             continue
+        frontend_short_hostname = _first_hostname_label(frontend_hostname)
+        if not frontend_short_hostname:
+            continue
 
         default_cname_target = parse_bool(row.get("default_cname_target"), default=False)
         row_hint = _sheet_row_hint(service_idx)
 
-        # Simplified target selection:
-        # - ingress == "caddy" -> always point to the DMZ caddy FQDN
-        # - ingress == "direct" -> always point to the backend FQDN from the hostname column
-        # - otherwise -> fallback to the hostname column (same as direct)
-        if ingress == "caddy":
-            target = "caddy.dmz.moyer.wtf"
+        alias = frontend_hostname
+        target = ""
+
+        if exposure == "trusted" and ingress == "caddy":
+            if not trusted_zone or not caddy_label or not tailnet_domain:
+                logger.debug(
+                    (
+                        "pihole: skipping trusted caddy service row with frontend_hostname=%r "
+                        "— missing trusted_zone/caddy_host/tailnet_domain"
+                    ),
+                    frontend_hostname,
+                )
+                _trace(
+                    (
+                        f"Services row {row_hint}: skip trusted caddy CNAME because trusted_zone/caddy_host/"
+                        f"tailnet_domain missing (frontend={frontend_hostname!r})"
+                    ),
+                    frontend_hostname,
+                )
+                continue
+
+            alias = f"{frontend_short_hostname}.{trusted_zone}".rstrip(".")
+            target = f"{caddy_label}.{tailnet_domain}".rstrip(".")
+
+        elif exposure == "trusted" and ingress == "direct":
+            if not trusted_zone or not tailnet_domain:
+                logger.debug(
+                    (
+                        "pihole: skipping trusted direct service row with frontend_hostname=%r "
+                        "— missing trusted_zone/tailnet_domain"
+                    ),
+                    frontend_hostname,
+                )
+                _trace(
+                    (
+                        f"Services row {row_hint}: skip trusted direct CNAME because trusted_zone/"
+                        f"tailnet_domain missing (frontend={frontend_hostname!r})"
+                    ),
+                    frontend_hostname,
+                )
+                continue
+
+            alias = f"{frontend_short_hostname}.{trusted_zone}".rstrip(".")
+            target = f"{frontend_short_hostname}.{tailnet_domain}".rstrip(".")
+
+        elif ingress == "caddy":
+            target = as_str(caddy_host).lower().strip().rstrip(".")
+            if not target:
+                logger.debug(
+                    "pihole: skipping service row with frontend_hostname=%r — caddy_host is empty",
+                    frontend_hostname,
+                )
+                _trace(
+                    (
+                        f"Services row {row_hint}: skip because caddy_host is missing "
+                        f"(frontend={frontend_hostname!r})"
+                    ),
+                    frontend_hostname,
+                )
+                continue
         else:
             # Use the backend FQDN when available for direct/other ingress types
             target = as_str(row.get("hostname")).lower().rstrip(".")
@@ -308,12 +382,14 @@ def render_config(
                 )
                 continue
 
-        service_cname_candidates[frontend_hostname].append((target, ingress, default_cname_target, row_hint))
+        service_cname_candidates[alias].append((target, ingress, default_cname_target, row_hint))
         _trace(
             (
-                f"Services row {row_hint}: candidate CNAME {frontend_hostname} -> {target} "
-                f"(ingress={ingress or 'unset'}, default_cname_target={default_cname_target})"
+                f"Services row {row_hint}: candidate CNAME {alias} -> {target} "
+                f"(ingress={ingress or 'unset'}, exposure={exposure or 'unset'}, "
+                f"default_cname_target={default_cname_target})"
             ),
+            alias,
             frontend_hostname,
             target,
         )
@@ -505,6 +581,7 @@ def main(argv: list[str] | None = None) -> int:
             caddy_host = str(get_config_value(globals_cfg, "caddy_hostname", "")).strip()
 
         tailnet_domain = str(getattr(args, "tailnet", "") or "").strip()
+        trusted_zone = str(getattr(args, "trusted_zone", "") or "").strip()
 
         rendered = render_config(
             sheet_url=str(args.sheet_url),
@@ -513,6 +590,7 @@ def main(argv: list[str] | None = None) -> int:
             template_path=template_path,
             caddy_host=caddy_host,
             tailnet_domain=tailnet_domain,
+            trusted_zone=trusted_zone,
             trace_hostname=(str(args.trace_hostname) if args.trace_hostname else None),
             debug=bool(args.debug),
         )
