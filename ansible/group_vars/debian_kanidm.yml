@@ -1,0 +1,25 @@
+kanidm_uri: "https://kanidm.moyer.wtf"
+
+kanidm_login_groups:
+  - "linux-users"
+
+kanidm_admin_group: "linux-admins"
+
+kanidm_uid_attr_map: "name"
+kanidm_gid_attr_map: "name"
+
+kanidm_home_prefix: "/home/"
+kanidm_home_attr: "uuid"
+kanidm_home_alias: "name"
+kanidm_use_etc_skel: true
+kanidm_default_shell: "/bin/bash"
+
+kanidm_ca_src: "kanidm-ca.crt"
+kanidm_ca_dest: "/usr/local/share/ca-certificates/kanidm-ca.crt"
+
+kanidm_ppa_key_url: "https://kanidm.github.io/kanidm_ppa/kanidm_ppa.asc"
+kanidm_ppa_list_url: "https://kanidm.github.io/kanidm_ppa/kanidm_ppa.list"
+
+kanidm_service_account_enabled: false
+kanidm_service_account_token: ""
+kanidm_service_account_token_path: "/etc/kanidm/unixd_token"

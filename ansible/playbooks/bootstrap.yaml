@@ -18,27 +18,8 @@
     bootstrap_user_home: /home/ansible
     bootstrap_ssh_pubkey_path: "~/.ssh/ansible.pub"
     bootstrap_ssh_key: "{{ lookup('file', bootstrap_ssh_pubkey_path) }}"  # Control node key
-    kanidm_ppa_component: stable
   
   tasks:
-    - name: Restore Kanidm PPA signing key when source list is present
-      ansible.builtin.get_url:
-        url: https://kanidm.github.io/kanidm_ppa/kanidm_ppa.asc
-        dest: /etc/apt/trusted.gpg.d/kanidm_ppa.asc
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Configure Kanidm PPA apt repository
-      ansible.builtin.apt_repository:
-        repo: >-
-          deb [arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/kanidm_ppa.asc]
-          https://kanidm.github.io/kanidm_ppa
-          {{ ansible_distribution_release }}
-          {{ kanidm_ppa_component }}
-        filename: kanidm_ppa
-        state: present
-      
     - name: Install essential packages
       ansible.builtin.apt:
         name:

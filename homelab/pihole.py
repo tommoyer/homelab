@@ -293,7 +293,11 @@ def render_config(
     service_cname_candidates: dict[str, list[tuple[str, str, bool, str]]] = defaultdict(list)
     for service_idx, row in services_df.iterrows():
         ingress = as_str(row.get("ingress")).lower()
-        exposure = as_str(row.get("exposure")).lower()
+        exposure = as_str(row.get("exposure")).lower().strip()
+        if exposure == "trusted_local":
+            exposure = "trusted-local"
+        if exposure == "trusted-local":
+            exposure = "public"
         frontend_hostname = as_str(row.get("frontend_hostname")).lower().rstrip(".")
         if not frontend_hostname:
             continue

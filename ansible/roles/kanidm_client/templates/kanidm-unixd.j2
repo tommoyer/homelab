@@ -1,0 +1,14 @@
+version = "2"
+default_shell = "{{ kanidm_default_shell }}"
+uid_attr_map = "{{ kanidm_uid_attr_map }}"
+gid_attr_map = "{{ kanidm_gid_attr_map }}"
+home_prefix = "{{ kanidm_home_prefix }}"
+home_attr = "{{ kanidm_home_attr }}"
+home_alias = "{{ kanidm_home_alias }}"
+use_etc_skel = {{ kanidm_use_etc_skel | lower }}
+
+[kanidm]
+pam_allowed_login_groups = [{% for g in kanidm_login_groups %}"{{ g }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+{% if kanidm_service_account_enabled | bool %}
+service_account_token_path = "{{ kanidm_service_account_token_path }}"
+{% endif %}

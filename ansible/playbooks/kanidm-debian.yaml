@@ -1,0 +1,14 @@
+- name: Configure Debian systems for Kanidm auth
+  hosts: "{{ target_hosts | default('kanidm_linux_login') }}"
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Fail if target is not Debian family
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == "Debian"
+        fail_msg: "This playbook supports Debian-based systems only."
+
+  roles:
+    - role: kanidm_client

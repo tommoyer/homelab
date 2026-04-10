@@ -7,13 +7,12 @@
     ssh_password_authentication: "no"
     ssh_pubkey_authentication: "yes"
     ssh_challenge_response_authentication: "no"
+    ssh_kbd_interactive_authentication: "yes"
+    ssh_use_pam: "yes"
     hardening_manage_root_authorized_key: true
     hardening_root_ssh_pubkey_path: "~/.ssh/id_rsa.pub"
     hardening_root_ssh_key: "{{ lookup('file', hardening_root_ssh_pubkey_path) }}"  # Control node public key
-    # authentik_url: "https://authentik.yourdomain.com"
-    # authentik_ldap_uri: "ldap://authentik.yourdomain.com:389"
-    # authentik_ldap_base_dn: "dc=ldap,dc=goauthentik,dc=io"
-  
+
   tasks:
     - name: Update and upgrade all packages
       apt:
@@ -24,17 +23,23 @@
         autoclean: yes
       when: ansible_os_family == "Debian"
 
-    - name: Install security and authentication packages
+    - name: Remove conflicting LDAP PAM/NSS packages
       apt:
         name:
-          - unattended-upgrades
-          - fail2ban
-          - ufw
           - libpam-ldap
           - libnss-ldap
           - nscd
           - sssd
           - sssd-ldap
+        state: absent
+        purge: yes
+
+    - name: Install security packages
+      apt:
+        name:
+          - unattended-upgrades
+          - fail2ban
+          - ufw
         state: present
 
     - name: Add SSH key to root authorized_keys
@@ -69,6 +74,8 @@
         - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication {{ ssh_pubkey_authentication }}' }
         - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication {{ ssh_password_authentication }}' }
         - { regexp: '^#?ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication {{ ssh_challenge_response_authentication }}' }
+        - { regexp: '^#?KbdInteractiveAuthentication', line: 'KbdInteractiveAuthentication {{ ssh_kbd_interactive_authentication }}' }
+        - { regexp: '^#?UsePAM', line: 'UsePAM {{ ssh_use_pam }}' }
         - { regexp: '^#?PermitEmptyPasswords', line: 'PermitEmptyPasswords no' }
         - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
         - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
@@ -93,30 +100,8 @@
         state: started
         enabled: yes
 
-    # - name: Configure SSSD for Authentik LDAP
-    #   template:
-    #     src: ../templates/sssd.conf.j2
-    #     dest: /etc/sssd/sssd.conf
-    #     mode: '0600'
-    #     owner: root
-    #     group: root
-    #   notify: restart sssd
-    #   when: "'authentik_managed' in group_names"
-
-    # - name: Enable SSSD service
-    #   systemd:
-    #     name: sssd
-    #     state: started
-    #     enabled: yes
-    #   when: "'authentik_managed' in group_names"
-
   handlers:
     - name: restart sshd
       systemd:
         name: sshd
-        state: restarted
-
-    - name: restart sssd
-      systemd:
-        name: sssd
         state: restarted
