@@ -1,0 +1,15 @@
+# Kanidm client configuration
+# Deployed by Ansible - do not edit manually.
+#
+# Required variables:
+#   kanidm_domain    - FQDN of the Kanidm server
+#
+# Optional variables:
+#   kanidm_verify_ca - Verify TLS CA (default: true)
+
+uri = "https://{{ kanidm_domain }}"
+
+verify_ca = {{ kanidm_verify_ca | default(true) | lower }}
+verify_hostnames = true
+
+ca = "/etc/kanidm/ca.pem"

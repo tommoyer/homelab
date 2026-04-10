@@ -9,4 +9,7 @@
 - Gitea Action runner
 - Backups for all services
 - Ansible for OIDC configuration templates for each service
-- Backup ODIC setup scripts from Kanidm container
+  - [ ] Homarr
+  - [ ] Mealie
+  - [ ] Vaultwarden
+- Ansible configuration for Proxmox nodes

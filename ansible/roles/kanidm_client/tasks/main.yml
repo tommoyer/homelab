@@ -1,0 +1,214 @@
+- name: Ensure prerequisite packages are installed
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gpg
+    state: present
+    update_cache: true
+
+- name: Ensure APT trusted key directory exists
+  ansible.builtin.file:
+    path: /etc/apt/trusted.gpg.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Kanidm PPA signing key
+  ansible.builtin.get_url:
+    url: https://kanidm.github.io/kanidm_ppa/kanidm_ppa.asc
+    dest: /etc/apt/trusted.gpg.d/kanidm_ppa.asc
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Configure Kanidm PPA apt repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/kanidm_ppa.asc]
+      https://kanidm.github.io/kanidm_ppa
+      {{ ansible_distribution_release }}
+      {{ kanidm_ppa_component }}
+    filename: kanidm_ppa
+    state: present
+
+
+- name: Install Kanidm client packages
+  ansible.builtin.apt:
+    name: "{{ kanidm_packages }}"
+    state: present
+    update_cache: true
+
+- name: Ensure /etc/kanidm exists
+  ansible.builtin.file:
+    path: /etc/kanidm
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Kanidm CA certificate
+  ansible.builtin.copy:
+    src: "{{ kanidm_ca_src }}"
+    dest: "{{ kanidm_ca_dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Update CA trust
+
+- name: Deploy /etc/kanidm/config
+  ansible.builtin.template:
+    src: kanidm-config.j2
+    dest: /etc/kanidm/config
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart kanidm-unixd
+
+- name: Deploy /etc/kanidm/unixd
+  ansible.builtin.template:
+    src: kanidm-unixd.j2
+    dest: /etc/kanidm/unixd
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Restart kanidm-unixd
+    - Restart kanidm-unixd-tasks
+
+- name: Install service account token when enabled
+  ansible.builtin.copy:
+    dest: "{{ kanidm_service_account_token_path }}"
+    content: "{{ kanidm_service_account_token | trim }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  when: kanidm_service_account_enabled | bool
+  notify: Restart kanidm-unixd
+
+- name: Ensure passwd uses kanidm first and systemd last
+  ansible.builtin.lineinfile:
+    path: /etc/nsswitch.conf
+    regexp: '^passwd:'
+    line: "passwd: {{ kanidm_nsswitch_passwd }}"
+    backup: true
+
+- name: Ensure group uses kanidm first and systemd last
+  ansible.builtin.lineinfile:
+    path: /etc/nsswitch.conf
+    regexp: '^group:'
+    line: "group: {{ kanidm_nsswitch_group }}"
+    backup: true
+
+- name: Enable pam_mkhomedir in common-session
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-session
+    insertafter: EOF
+    line: "session required pam_mkhomedir.so skel=/etc/skel umask=0022"
+    state: present
+    backup: true
+
+- name: Enable pam_kanidm in common-auth
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-auth
+    insertafter: BOF
+    line: "auth sufficient pam_kanidm.so"
+    state: present
+    backup: true
+
+- name: Remove legacy top-level pam_kanidm common-account entry
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-account
+    regexp: '^account\s+sufficient\s+pam_kanidm\.so$'
+    state: absent
+    backup: true
+
+- name: Normalize pam_kanidm account rule in common-account
+  ansible.builtin.replace:
+    path: /etc/pam.d/common-account
+    regexp: '^account\s+\[success=1 new_authtok_reqd=done default=ignore\]\s+pam_kanidm\.so(?:\s+ignore_unknown_user)?\s*$'
+    replace: 'account sufficient pam_kanidm.so ignore_unknown_user'
+    backup: true
+
+- name: Ensure pam_kanidm is sufficient in common-account primary block
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-account
+    insertafter: '^# here are the per-package modules \(the "Primary" block\)'
+    line: "account sufficient pam_kanidm.so ignore_unknown_user"
+    state: present
+    backup: true
+
+- name: Enable pam_kanidm in common-password
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-password
+    insertafter: BOF
+    line: "password sufficient pam_kanidm.so use_authtok"
+    state: present
+    backup: true
+
+- name: Enable pam_kanidm in common-session
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-session
+    insertafter: BOF
+    line: "session optional pam_kanidm.so"
+    state: present
+    backup: true
+
+- name: Ensure sshd drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy Kanidm sshd drop-in
+  ansible.builtin.template:
+    src: sshd-kanidm.conf.j2
+    dest: "{{ kanidm_sshd_dropin }}"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "/usr/sbin/sshd -t -f %s"
+  notify: Restart ssh
+
+- name: Deploy sudoers rule for Kanidm admin group
+  ansible.builtin.template:
+    src: sudo-linux-admins.j2
+    dest: "{{ kanidm_sudoers_file }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "/usr/sbin/visudo -cf %s"
+
+- name: Enable and start kanidm-unixd
+  ansible.builtin.systemd:
+    name: kanidm-unixd
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Enable and start kanidm-unixd-tasks
+  ansible.builtin.systemd:
+    name: kanidm-unixd-tasks
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Flush handlers before validation
+  ansible.builtin.meta: flush_handlers
+
+- name: Validate Kanidm login group resolution
+  ansible.builtin.command: getent group {{ kanidm_login_groups[0] }}
+  register: kanidm_group_lookup
+  changed_when: false
+  failed_when: false
+
+- name: Show note if login group is not yet resolvable
+  ansible.builtin.debug:
+    msg: >-
+      Kanidm group {{ kanidm_login_groups[0] }} was not resolved yet.
+      Confirm POSIX is enabled for the group and anonymous read is allowed,
+      or enable a service account token.
+  when: kanidm_group_lookup.rc != 0

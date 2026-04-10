@@ -1,0 +1,38 @@
+# kanidm-unixd configuration
+# Deployed by Ansible - do not edit manually.
+#
+# Optional variables (defaults shown):
+#   kanidm_unixd_uid_attr_map             - spn
+#   kanidm_unixd_gid_attr_map             - spn
+#   kanidm_unixd_home_prefix              - /home
+#   kanidm_unixd_home_attr                - uuid
+#   kanidm_unixd_home_alias               - spn
+#   kanidm_unixd_shell                    - /bin/bash
+#   kanidm_unixd_pam_allowed_login_groups - [] (empty = all Kanidm users may login)
+
+# Attribute used to derive the local unix uid number.
+uid_attr_map = "{{ kanidm_unixd_uid_attr_map | default('spn') }}"
+
+# Attribute used to derive the local unix gid number.
+gid_attr_map = "{{ kanidm_unixd_gid_attr_map | default('spn') }}"
+
+# Directory prefix for automatically created home directories.
+home_prefix = "{{ kanidm_unixd_home_prefix | default('/home') }}"
+
+# Attribute used as the home directory name component.
+home_attr = "{{ kanidm_unixd_home_attr | default('uuid') }}"
+
+# Optional symlink: home_alias -> home_attr  (e.g. /home/<spn> -> /home/<uuid>)
+home_alias = "{{ kanidm_unixd_home_alias | default('spn') }}"
+
+# Default login shell for Kanidm users.
+default_shell = "{{ kanidm_unixd_shell | default('/bin/bash') }}"
+
+{% if kanidm_unixd_pam_allowed_login_groups | default([]) | length > 0 %}
+# Only members of these Kanidm groups may authenticate via PAM.
+pam_allowed_login_groups = [
+{% for group in kanidm_unixd_pam_allowed_login_groups %}
+  "{{ group }}",
+{% endfor %}
+]
+{% endif %}

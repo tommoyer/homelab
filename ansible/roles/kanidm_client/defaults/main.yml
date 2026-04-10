@@ -1,0 +1,36 @@
+kanidm_packages:
+  - kanidm-unixd
+
+kanidm_uri: "https://kanidm.moyer.wtf"
+
+kanidm_login_groups:
+  - "linux_users"
+  - "linux_admins"
+
+kanidm_admin_group: "linux_admins"
+
+kanidm_default_shell: "/bin/bash"
+kanidm_uid_attr_map: "spn"
+kanidm_gid_attr_map: "spn"
+kanidm_home_prefix: "/home/"
+kanidm_home_attr: "uuid"
+kanidm_home_alias: "spn"
+kanidm_use_etc_skel: true
+
+kanidm_ca_src: "kanidm-ca.crt"
+kanidm_ca_dest: "/usr/local/share/ca-certificates/kanidm-ca.crt"
+
+kanidm_ppa_key_url: "https://kanidm.github.io/kanidm_ppa/kanidm_ppa.asc"
+kanidm_ppa_list_url: "https://kanidm.github.io/kanidm_ppa/kanidm_ppa.list"
+
+kanidm_service_account_enabled: false
+kanidm_service_account_token: ""
+kanidm_service_account_token_path: "/etc/kanidm/unixd_token"
+
+kanidm_sshd_dropin: "/etc/ssh/sshd_config.d/10-kanidm.conf"
+kanidm_sudoers_file: "/etc/sudoers.d/90-kanidm-linux-admins"
+
+kanidm_nsswitch_passwd: "kanidm compat systemd"
+kanidm_nsswitch_group: "kanidm compat systemd"
+
+kanidm_ppa_component: "stable"
