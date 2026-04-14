@@ -1,9 +1,9 @@
 PubkeyAuthentication yes
 UsePAM yes
+KbdInteractiveAuthentication yes
 AuthorizedKeysCommand /usr/sbin/kanidm_ssh_authorizedkeys %u
 AuthorizedKeysCommandUser nobody
 
-PermitRootLogin no
 PermitEmptyPasswords no
 GSSAPIAuthentication no
 KerberosAuthentication no

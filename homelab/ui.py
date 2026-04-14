@@ -214,7 +214,9 @@ def _config_menu(
 ) -> bool:
     """Display configuration menu for a command. Returns True to run, False to cancel."""
     curses.curs_set(0)
-    selected = 0
+    # Default to "Run Command" so pressing Enter immediately executes
+    # with defaults unless the user explicitly navigates to edit flags.
+    selected = len(config.flags)
     
     # If no flags, just run immediately
     if not config.flags:

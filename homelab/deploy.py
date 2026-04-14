@@ -123,7 +123,7 @@ def _normalize_int_like_string(value: object) -> str:
 
 def _parse_playbooks_value(value: object) -> list[str]:
     """
-    Parse a comma-separated Playbooks cell into a list of playbook names.
+    Parse a semicolon-separated Playbooks cell into a list of playbook names.
     
     Args:
         value: Raw value from Nodes sheet Playbooks column
@@ -132,7 +132,7 @@ def _parse_playbooks_value(value: object) -> list[str]:
         List of playbook names (stripped, non-empty)
         
     Example:
-        "app.yaml, monitoring.yaml" -> ["app.yaml", "monitoring.yaml"]
+        "app.yaml; monitoring.yaml" -> ["app.yaml", "monitoring.yaml"]
         "" -> []
         None -> []
     """
@@ -145,7 +145,7 @@ def _parse_playbooks_value(value: object) -> list[str]:
     if not playbooks_str:
         return []
     
-    return [p.strip() for p in playbooks_str.split(",") if p.strip()]
+    return [p.strip() for p in playbooks_str.split(";") if p.strip()]
 
 
 

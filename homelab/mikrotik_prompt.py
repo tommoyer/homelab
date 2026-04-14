@@ -85,6 +85,8 @@ class ServiceFormData:
     dhcp_mac: str = ""
     dhcp_address: str = ""
     dhcp_subnet: str = ""
+    dhcp_vlan_id: str = ""
+    extra_ports: str = ""
 
 
 @dataclass
@@ -96,6 +98,7 @@ class ParsedInput:
     protocol: str | None
     frontend_ports: list[int]
     backend_ports: list[int]
+    extra_ports: list[int]
     backend_ip: str | None
     caddy_ip: str | None
     source_ip: str | None
@@ -113,6 +116,24 @@ class ParsedInput:
     dhcp_mac: str | None
     dhcp_address: str | None
     dhcp_subnet: str | None
+    dhcp_server: str | None
+
+
+def _normalize_vlan_id(value: str | None) -> str | None:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return None
+    match = re.search(r"(\d+)", raw)
+    if not match:
+        return None
+    return str(int(match.group(1)))
+
+
+def _dhcp_server_from_vlan_id(value: str | None) -> str | None:
+    vlan_id = _normalize_vlan_id(value)
+    if vlan_id is None:
+        return None
+    return f"dhcp-v{vlan_id}"
 
 
 def _to_bool(value: str) -> bool:
@@ -169,6 +190,65 @@ def _normalize_ports_lenient(value: Any) -> list[int]:
 def _ports_to_form_value(value: Any) -> str:
     ports = _normalize_ports_lenient(value)
     return ",".join(str(port) for port in ports)
+
+
+def _merged_ports_for_display(base_ports: Any, extra_ports: Any) -> str:
+    merged: list[int] = []
+    seen: set[int] = set()
+    for port in [*_normalize_ports_lenient(base_ports), *_normalize_ports_lenient(extra_ports)]:
+        if port in seen:
+            continue
+        seen.add(port)
+        merged.append(port)
+    return ",".join(str(port) for port in merged)
+
+
+def _split_backend_ports_for_storage(*, merged_ports_value: str, frontend_ports_value: Any) -> tuple[str, str]:
+    ports = _normalize_ports_lenient(merged_ports_value)
+    if not ports:
+        return "", ""
+
+    frontend_ports = _normalize_ports_lenient(frontend_ports_value)
+
+    if not frontend_ports:
+        base_ports = ports
+        extra_ports: list[int] = []
+    elif len(ports) <= len(frontend_ports):
+        base_ports = ports
+        extra_ports = []
+    else:
+        base_count = len(frontend_ports)
+        base_ports = ports[:base_count]
+        extra_ports = ports[base_count:]
+
+    return (
+        ",".join(str(port) for port in base_ports),
+        ",".join(str(port) for port in extra_ports),
+    )
+
+
+def _extract_extra_cname_ports(value: Any) -> list[int]:
+    raw = as_str(value)
+    if not raw:
+        return []
+
+    ports: list[int] = []
+    for match in re.finditer(r":\s*(\d{1,5})(?=$|[\s,;/])", raw):
+        try:
+            parsed = int(match.group(1))
+        except ValueError:
+            continue
+        if 1 <= parsed <= 65535:
+            ports.append(parsed)
+
+    deduped: list[int] = []
+    seen: set[int] = set()
+    for port in ports:
+        if port in seen:
+            continue
+        seen.add(port)
+        deduped.append(port)
+    return deduped
 
 
 def _load_helpers_values(
@@ -298,6 +378,9 @@ def _prefill_candidates_from_services_sheet(
                 "source_vlan": as_str(row.get("source_vlan")) or as_str(row.get("source_vlans")),
                 "destination_vlan": as_str(row.get("destination_vlan")),
                 "destination_address_list": as_str(row.get("destination_address_list")),
+                "extra_ports": ",".join(
+                    str(port) for port in _extract_extra_cname_ports(row.get("extra_cnames"))
+                ),
             }
         )
 
@@ -378,6 +461,7 @@ def _prefill_from_nodes_sheet(
     ip_column: str,
     subnet_column: str,
     mac_column: str,
+    vlan_id_column: str,
 ) -> dict[str, str]:
     target = hostname.strip().lower()
     if not target:
@@ -403,6 +487,7 @@ def _prefill_from_nodes_sheet(
             "dhcp_mac": as_str(row.get(mac_column)),
             "dhcp_address": as_str(row.get(ip_column)),
             "dhcp_subnet": as_str(row.get(subnet_column)),
+            "dhcp_vlan_id": as_str(row.get(vlan_id_column)),
             "enable_dhcp": enable_dhcp,
         }
 
@@ -640,6 +725,7 @@ def _run_form_ui(
         ("dhcp_mac", "DHCP MAC (if enabled)"),
         ("dhcp_address", "DHCP IP address (if enabled)"),
         ("dhcp_subnet", "DHCP subnet (optional)"),
+        ("dhcp_vlan_id", "DHCP VLAN ID (if enabled)"),
     ]
 
     def _inner(stdscr: Any) -> ServiceFormData:
@@ -653,6 +739,8 @@ def _run_form_ui(
             row = 3
             for i, (key, label) in enumerate(fields):
                 value = getattr(form_data, key)
+                if key == "backend_ports":
+                    value = _merged_ports_for_display(form_data.backend_ports, form_data.extra_ports)
                 prefix = ">" if i == idx else " "
                 stdscr.addstr(row + i, 0, f"{prefix} {label}: {value}")
 
@@ -668,6 +756,8 @@ def _run_form_ui(
             if ch in {10, 13}:
                 key, label = fields[idx]
                 current = str(getattr(form_data, key))
+                if key == "backend_ports":
+                    current = _merged_ports_for_display(form_data.backend_ports, form_data.extra_ports)
                 options = selection_options.get(key)
                 if options is not None:
                     selected = _run_option_selection(
@@ -690,7 +780,16 @@ def _run_form_ui(
                 while True:
                     keypress = stdscr.getch()
                     if keypress in {10, 13}:
-                        setattr(form_data, key, "".join(buf).strip())
+                        updated = "".join(buf).strip()
+                        if key == "backend_ports":
+                            stored_backend_ports, stored_extra_ports = _split_backend_ports_for_storage(
+                                merged_ports_value=updated,
+                                frontend_ports_value=form_data.frontend_ports,
+                            )
+                            form_data.backend_ports = stored_backend_ports
+                            form_data.extra_ports = stored_extra_ports
+                        else:
+                            setattr(form_data, key, updated)
                         break
                     if keypress in {curses.KEY_BACKSPACE, 127, 8}:
                         if pos > 0:
@@ -729,11 +828,12 @@ def _run_batch_confirmation_ui(forms: list[ServiceFormData]) -> bool:
 
             for idx, form in enumerate(forms, start=1):
                 service_name = form.service_name.strip() or form.service_key.strip() or "service"
+                backend_ports_display = _merged_ports_for_display(form.backend_ports, form.extra_ports)
                 summary = (
                     f"[{idx}] service={service_name} "
                     f"host={form.hostname.strip()} ingress={form.ingress.strip() or 'dstnat'} "
                     f"protocol={form.protocol.strip() or 'any'} "
-                    f"frontend={form.frontend_ports.strip()} backend={form.backend_ports.strip()}"
+                    f"frontend={form.frontend_ports.strip()} backend={backend_ports_display}"
                 )
                 lines.append(summary)
 
@@ -823,6 +923,7 @@ def _normalize_form(
         protocol=protocol,
         frontend_ports=_normalize_ports_lenient(form_data.frontend_ports),
         backend_ports=_normalize_ports_lenient(form_data.backend_ports),
+        extra_ports=_normalize_ports_lenient(form_data.extra_ports),
         backend_ip=backend_ip,
         caddy_ip=caddy_ip_normalized,
         source_ip=normalize_ip(form_data.source_ip),
@@ -842,6 +943,7 @@ def _normalize_form(
         dhcp_mac=form_data.dhcp_mac.strip() or None,
         dhcp_address=normalize_ip(form_data.dhcp_address),
         dhcp_subnet=form_data.dhcp_subnet.strip() or None,
+        dhcp_server=_dhcp_server_from_vlan_id(form_data.dhcp_vlan_id),
     )
 
 
@@ -862,10 +964,18 @@ def _render_commands(parsed: ParsedInput) -> list[str]:
     is_public = parsed.exposure == "public"
 
     mappings = _port_mappings(parsed.frontend_ports, parsed.backend_ports)
+    for port in parsed.extra_ports:
+        pair = (int(port), int(port))
+        if pair not in mappings:
+            mappings.append(pair)
+
     backend_ports_for_lists: set[int] = set()
     for _, backend_port in mappings:
         if backend_port > 0:
             backend_ports_for_lists.add(int(backend_port))
+    for extra_port in parsed.extra_ports:
+        if extra_port > 0:
+            backend_ports_for_lists.add(int(extra_port))
     if not backend_ports_for_lists and parsed.backend_ports:
         for backend_port in parsed.backend_ports:
             if backend_port > 0:
@@ -992,10 +1102,16 @@ def _render_commands(parsed: ParsedInput) -> list[str]:
     # --- DHCP lease ---
     if parsed.enable_dhcp and parsed.dhcp_mac and parsed.dhcp_address:
         comment = f"{COMMENT_MARKER}; dhcp-lease; {parsed.dhcp_mac}"
+        lease_parts = [
+            "/ip dhcp-server lease add",
+            f"mac-address={parsed.dhcp_mac}",
+            f"address={parsed.dhcp_address}",
+        ]
+        if parsed.dhcp_server:
+            lease_parts.append(f"server={parsed.dhcp_server}")
+        lease_parts.append(f"comment={mikrotik_quote(comment)}")
         commands.append(
-            "/ip dhcp-server lease add "
-            f"mac-address={parsed.dhcp_mac} address={parsed.dhcp_address} "
-            f"comment={mikrotik_quote(comment)}"
+            " ".join(lease_parts)
         )
 
     return commands
@@ -1186,6 +1302,7 @@ def main(argv: list[str] | None = None) -> int:
     ip_column = normalize_column_name(str(get_config_value(lease_cfg, "ip_column", "IP Address")))
     subnet_column = normalize_column_name(str(get_config_value(lease_cfg, "subnet_column", "Subnet")))
     mac_column = normalize_column_name(str(get_config_value(lease_cfg, "mac_column", "MAC Address")))
+    vlan_id_column = normalize_column_name(str(get_config_value(lease_cfg, "vlan_id_column", "VLAN ID")))
 
     # ---- Resolve the Caddy IP (hostname or literal) via Nodes sheet ----
     caddy_ip_resolved = _resolve_caddy_ip(
@@ -1393,6 +1510,7 @@ def main(argv: list[str] | None = None) -> int:
                 ip_column=ip_column,
                 subnet_column=subnet_column,
                 mac_column=mac_column,
+                vlan_id_column=vlan_id_column,
             )
             for key, value in nodes_prefill.items():
                 if hasattr(form, key) and value:
@@ -1436,6 +1554,34 @@ def main(argv: list[str] | None = None) -> int:
             place_before_filter_comment=place_before_filter_comment,
             place_before_input_comment=place_before_input_comment,
         )
+
+        if parsed.enable_dhcp and not parsed.dhcp_server:
+            if args.no_prompt:
+                failures.append(
+                    (
+                        service_key,
+                        (
+                            "unable to determine DHCP server; missing VLAN ID for "
+                            f"column '{vlan_id_column}' (expected server format dhcp-v<vlan-id>)"
+                        ),
+                    )
+                )
+                continue
+
+            while True:
+                print(
+                    (
+                        f"Enter DHCP VLAN ID for '{service_key}' "
+                        "(server will be dhcp-v<vlan-id>): "
+                    ),
+                    end="",
+                    flush=True,
+                )
+                entered_vlan_id = input().strip()
+                parsed.dhcp_server = _dhcp_server_from_vlan_id(entered_vlan_id)
+                if parsed.dhcp_server:
+                    break
+                print("Invalid VLAN ID. Enter a numeric VLAN ID (for example: 20).", file=sys.stderr)
 
         if parsed.enable_dhcp and parsed.dhcp_address and not parsed.dhcp_mac:
             parsed.dhcp_mac = _generate_random_mac()
