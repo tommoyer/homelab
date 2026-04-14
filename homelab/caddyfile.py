@@ -72,6 +72,45 @@ def caddy_hostname_label(fqdn: str) -> str:
     return slugify(fqdn.split(".", 1)[0])
 
 
+def split_fqdn_list(value: Any, *, debug: bool = False) -> list[tuple[str, int | None]]:
+    raw = as_str(value)
+    if not raw:
+        return []
+    values: list[tuple[str, int | None]] = []
+    for item in raw.split(";"):
+        token = item.strip()
+        if not token:
+            continue
+
+        fqdn_part = token
+        port_override: int | None = None
+        if ":" in token:
+            fqdn_part, port_part = token.rsplit(":", 1)
+            port_part = port_part.strip()
+            if port_part:
+                try:
+                    parsed_port = int(port_part)
+                    if 1 <= parsed_port <= 65535:
+                        port_override = parsed_port
+                    else:
+                        if debug:
+                            print(
+                                f"[debug] Ignoring invalid extra_cname port {port_part!r} in {token!r}",
+                                file=sys.stderr,
+                            )
+                except ValueError:
+                    if debug:
+                        print(
+                            f"[debug] Ignoring non-integer extra_cname port {port_part!r} in {token!r}",
+                            file=sys.stderr,
+                        )
+
+        fqdn = fqdn_part.strip().lower().rstrip(".")
+        if fqdn:
+            values.append((fqdn, port_override))
+    return values
+
+
 def resolve_host_template_path(*, template_dir: Path | None, fqdn: str) -> Path | None:
     if template_dir is None:
         return None
@@ -362,8 +401,8 @@ def collect_proxy_services_from_sheet(
         if ingress != "caddy":
             continue
 
-        fqdn = as_str(row.get("frontend_hostname"))
-        if not fqdn:
+        frontend_hostname = as_str(row.get("frontend_hostname"))
+        if not frontend_hostname:
             if debug:
                 print(
                     f"[debug] Row {idx} missing Frontend Hostname; skipping",
@@ -397,21 +436,25 @@ def collect_proxy_services_from_sheet(
 
         ports = normalize_ports(row.get("backend_port"))
 
-        port = ports[0] if ports else None
+        default_port = ports[0] if ports else None
         if debug and len(ports) > 1:
-            print(f"[debug] Row {idx} has multiple ports; using {port}", file=sys.stderr)
+            print(f"[debug] Row {idx} has multiple ports; using {default_port}", file=sys.stderr)
 
-        backend = backend_ip if port is None else f"{backend_ip}:{port}"
+        aliases: list[tuple[str, int | None]] = [(frontend_hostname, None)]
+        aliases.extend(split_fqdn_list(row.get("extra_cnames"), debug=debug))
 
-        services.append(
-            {
-                "id": row_id,
-                "fqdn": fqdn,
-                "backend": backend,
-                "ignore_tls": bool(ignore_tls),
-                "exposure": exposure,
-            }
-        )
+        for fqdn, port_override in dict.fromkeys(aliases):
+            effective_port = port_override if port_override is not None else default_port
+            backend = backend_ip if effective_port is None else f"{backend_ip}:{effective_port}"
+            services.append(
+                {
+                    "id": row_id,
+                    "fqdn": fqdn,
+                    "backend": backend,
+                    "ignore_tls": bool(ignore_tls),
+                    "exposure": exposure,
+                }
+            )
 
     return services
 

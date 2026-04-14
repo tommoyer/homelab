@@ -61,6 +61,18 @@ def _first_hostname_label(value: object) -> str:
     return as_str(value).lower().strip().rstrip(".").split(".")[0]
 
 
+def _split_fqdn_list(value: object) -> list[str]:
+    raw = as_str(value)
+    if not raw:
+        return []
+    values: list[str] = []
+    for item in raw.split(";"):
+        fqdn = item.strip().split(":", 1)[0].lower().rstrip(".")
+        if fqdn:
+            values.append(fqdn)
+    return values
+
+
 def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
     """Build argument parser for pihole tool using cli_common utilities."""
     repo_root = Path(__file__).resolve().parents[1]
@@ -74,7 +86,7 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
         description=(
             "Generate Pi-hole v6 TOML config from Google Sheets by rendering a Jinja2 template. "
             "Populates dns.hosts from the Nodes tab and dns.cnameRecords from the Services tab "
-            "(and optional Nodes CNAMEs)."
+            "(and optional Nodes/Services extra CNAMEs)."
         ),
         config_path=config_path,
         globals_cfg=globals_cfg,
@@ -283,6 +295,29 @@ def render_config(
         nodes_cname_by_alias[cname].append((target, f"nodes row={row_hint}"))
         _trace(f"Nodes row {row_hint}: candidate CNAME {cname} -> {target}", hostname, dns_name, cname, target)
 
+        extra_cnames = _split_fqdn_list(row.get("extra_cnames"))
+        for extra_cname in extra_cnames:
+            if not extra_cname or extra_cname == target:
+                _trace(
+                    (
+                        f"Nodes row {row_hint}: skip extra CNAME because alias invalid or self-target "
+                        f"(alias={extra_cname!r}, target={target!r})"
+                    ),
+                    hostname,
+                    dns_name,
+                    extra_cname,
+                    target,
+                )
+                continue
+            nodes_cname_by_alias[extra_cname].append((target, f"nodes extra_cnames row={row_hint}"))
+            _trace(
+                f"Nodes row {row_hint}: candidate extra CNAME {extra_cname} -> {target}",
+                hostname,
+                dns_name,
+                extra_cname,
+                target,
+            )
+
     logger.debug("pihole: a_records=%d", len(a_records))
 
     services_df = df_with_normalized_columns(services_df)
@@ -386,17 +421,19 @@ def render_config(
                 )
                 continue
 
-        service_cname_candidates[alias].append((target, ingress, default_cname_target, row_hint))
-        _trace(
-            (
-                f"Services row {row_hint}: candidate CNAME {alias} -> {target} "
-                f"(ingress={ingress or 'unset'}, exposure={exposure or 'unset'}, "
-                f"default_cname_target={default_cname_target})"
-            ),
-            alias,
-            frontend_hostname,
-            target,
-        )
+        service_aliases = [alias, *_split_fqdn_list(row.get("extra_cnames"))]
+        for service_alias in dict.fromkeys(service_aliases):
+            service_cname_candidates[service_alias].append((target, ingress, default_cname_target, row_hint))
+            _trace(
+                (
+                    f"Services row {row_hint}: candidate CNAME {service_alias} -> {target} "
+                    f"(ingress={ingress or 'unset'}, exposure={exposure or 'unset'}, "
+                    f"default_cname_target={default_cname_target})"
+                ),
+                service_alias,
+                frontend_hostname,
+                target,
+            )
 
     resolved_alias_targets: dict[str, str] = {}
     conflicts: list[str] = []

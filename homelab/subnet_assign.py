@@ -10,6 +10,7 @@ Interactive subnet/IP assignment tool for homelab network
 """
 
 import argparse
+import collections
 import curses
 import ipaddress
 import random
@@ -30,9 +31,23 @@ def build_parser(argv=None):
     globals_cfg = get_table(config, "globals")
     parser = argparse.ArgumentParser(description="Interactive subnet/IP assignment tool")
     parser.add_argument('--config', type=Path, default=config_path, help='Path to config.toml')
-    parser.add_argument('--sheet-url', default=get_config_value(globals_cfg, "sheet_url", DEFAULT_SHEET_URL), help='Google Sheet URL')
-    parser.add_argument('--zones-gid', type=int, default=int(get_config_value(globals_cfg, "zones_gid", 0)), help='Zones tab GID')
-    parser.add_argument('--nodes-gid', type=int, default=int(get_config_value(globals_cfg, "nodes_gid", 0)), help='Nodes tab GID')
+    parser.add_argument(
+        '--sheet-url',
+        default=get_config_value(globals_cfg, "sheet_url", DEFAULT_SHEET_URL),
+        help='Google Sheet URL',
+    )
+    parser.add_argument(
+        '--zones-gid',
+        type=int,
+        default=int(get_config_value(globals_cfg, "zones_gid", 0)),
+        help='Zones tab GID',
+    )
+    parser.add_argument(
+        '--nodes-gid',
+        type=int,
+        default=int(get_config_value(globals_cfg, "nodes_gid", 0)),
+        help='Nodes tab GID',
+    )
     return parser
 
 
@@ -50,12 +65,24 @@ def get_zones(sheet_url, zones_gid):
 def get_assigned_ips(sheet_url, nodes_gid):
     df = sheets.get_sheet_df(sheet_url, nodes_gid, 30, "Nodes")
     subnet_to_ips = {}
+    proxmox_node_counts = collections.Counter()
     for _, row in df.iterrows():
         subnet = sheets.as_str(row.get("subnet"))
         ip = sheets.as_str(row.get("ip_address"))
+        proxmox_node = sheets.as_str(row.get("proxmox_node"))
         if subnet and ip:
             subnet_to_ips.setdefault(subnet, set()).add(ip)
-    return subnet_to_ips
+        if proxmox_node:
+            proxmox_node_counts[proxmox_node] += 1
+    return subnet_to_ips, proxmox_node_counts
+
+
+def suggest_proxmox_node(proxmox_node_counts):
+    if not proxmox_node_counts:
+        return None
+    min_count = min(proxmox_node_counts.values())
+    candidates = [node for node, count in proxmox_node_counts.items() if count == min_count]
+    return sorted(candidates)[0]
 
 
 def pick_subnet_menu(zones):
@@ -99,7 +126,7 @@ def find_next_ip(subnet, assigned_ips):
 
 def random_mac(prefix="BC:24:11"):
     # Generate 3 random bytes
-    return prefix + ":" + ":".join(f"{random.randint(0,255):02X}" for _ in range(3))
+    return prefix + ":" + ":".join(f"{random.randint(0, 255):02X}" for _ in range(3))
 
 
 def main(argv=None):
@@ -112,18 +139,23 @@ def main(argv=None):
         print("Missing sheet_url, zones_gid, or nodes_gid. Check config or provide overrides.")
         return 1
     zones = get_zones(sheet_url, zones_gid)
-    subnet_to_ips = get_assigned_ips(sheet_url, nodes_gid)
+    subnet_to_ips, proxmox_node_counts = get_assigned_ips(sheet_url, nodes_gid)
     selected = pick_subnet_menu(zones)
     subnet = selected['subnet']
     vlan_name = selected['vlan_name']
     assigned = subnet_to_ips.get(subnet, set())
     next_ip = find_next_ip(subnet, assigned)
+    suggested_proxmox_node = suggest_proxmox_node(proxmox_node_counts)
     if not next_ip:
         print(f"No available IPs in {subnet}")
         return 1
     mac = random_mac()
     print(f"\nSelected: {vlan_name} : {subnet}")
     print(f"Next available IP: {next_ip}")
+    if suggested_proxmox_node:
+        print(f"Suggested Proxmox node: {suggested_proxmox_node} (fewest current instances)")
+    else:
+        print("Suggested Proxmox node: unavailable (no proxmox_node values found)")
     print(f"Random MAC: {mac}")
     return 0
 

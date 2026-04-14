@@ -1,0 +1,5 @@
+---
+- name: Testing andrewrothstein.unarchivedeps
+  hosts: all
+  roles:
+    - role: '{{ playbook_dir }}'

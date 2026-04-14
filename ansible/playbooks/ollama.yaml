@@ -1,0 +1,185 @@
+# Ansible playbook to enable non-free repos, install firmware-amd-graphics, and install ROCm on Debian 13 (Trixie)
+- hosts: "{{ target_hosts | default('ollama') }}"
+  become: true
+  vars:
+    rocm_version: "7.2.1"
+  tasks:
+    - name: Check if legacy apt sources.list exists
+      ansible.builtin.stat:
+        path: /etc/apt/sources.list
+      register: sources_list_stat
+
+    - name: Enable contrib and non-free repositories in sources.list
+      ansible.builtin.replace:
+        path: /etc/apt/sources.list
+        regexp: '^(deb(?:-src)?\s+\S+\s+\S+\s+)main(?:\s+.*)?$'
+        replace: '\1main contrib non-free non-free-firmware'
+      when: sources_list_stat.stat.exists
+
+    - name: Check if deb822 apt sources file exists
+      ansible.builtin.stat:
+        path: /etc/apt/sources.list.d/debian.sources
+      register: deb822_sources_stat
+
+    - name: Enable contrib and non-free repositories in debian.sources
+      ansible.builtin.replace:
+        path: /etc/apt/sources.list.d/debian.sources
+        regexp: '^Components:\s*main(?:\s+\S+)*$'
+        replace: 'Components: main contrib non-free non-free-firmware'
+      when: deb822_sources_stat.stat.exists
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Install key and tooling prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - gnupg
+          - wget
+        state: present
+
+    - name: Install firmware-amd-graphics
+      ansible.builtin.apt:
+        name: firmware-amd-graphics
+        state: present
+
+    - name: Create apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Download ROCm signing key (ASCII armored)
+      ansible.builtin.get_url:
+        url: https://repo.radeon.com/rocm/rocm.gpg.key
+        dest: /etc/apt/keyrings/rocm.gpg.key
+        mode: '0644'
+
+    - name: Convert ROCm signing key to keyring format
+      ansible.builtin.command:
+        cmd: gpg --dearmor --yes --output /etc/apt/keyrings/rocm.gpg /etc/apt/keyrings/rocm.gpg.key
+      args:
+        creates: /etc/apt/keyrings/rocm.gpg
+
+    - name: Add ROCm package repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/{{ rocm_version }} noble main"
+        state: present
+        filename: rocm
+
+    - name: Add AMD graphics repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/graphics/{{ rocm_version }}/ubuntu noble main"
+        state: present
+        filename: rocm
+
+    - name: Pin AMD repository priority
+      ansible.builtin.copy:
+        dest: /etc/apt/preferences.d/rocm-pin-600
+        mode: '0644'
+        content: |
+          Package: *
+          Pin: release o=repo.radeon.com
+          Pin-Priority: 600
+
+    - name: Update apt cache after adding ROCm repo
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Install ROCm meta-package
+      ansible.builtin.apt:
+        name: rocm
+        state: present
+
+    - name: Reboot notice
+      ansible.builtin.debug:
+        msg: "ROCm and firmware installed. A reboot may be required for changes to take effect."
+
+- hosts: "{{ target_hosts | default('ollama') }}"
+  become: true
+  roles:
+    - andrewrothstein.ollama
+
+- hosts: "{{ target_hosts | default('ollama') }}"
+  become: true
+  vars:
+    ollama_service_user: ollama
+    ollama_service_group: ollama
+    ollama_service_home: /var/lib/ollama
+    ollama_models_dir: /var/lib/ollama/.ollama/models
+    ollama_host: 0.0.0.0:11434
+  tasks:
+    - name: Resolve ollama executable path
+      ansible.builtin.command: command -v ollama
+      register: ollama_exe_cmd
+      changed_when: false
+      failed_when: false
+
+    - name: Set ollama executable path fact
+      ansible.builtin.set_fact:
+        ollama_exec_path: "{{ (ollama_exe_cmd.stdout | trim) if (ollama_exe_cmd.stdout | trim | length > 0) else '/usr/local/bin/ollama' }}"
+
+    - name: Check resolved ollama executable path
+      ansible.builtin.stat:
+        path: "{{ ollama_exec_path }}"
+      register: ollama_exec_stat
+
+    - name: Fail if ollama executable is missing
+      ansible.builtin.assert:
+        that:
+          - ollama_exec_stat.stat.exists
+          - ollama_exec_stat.stat.executable
+        fail_msg: "Ollama executable not found at {{ ollama_exec_path }}. Ensure role andrewrothstein.ollama completed successfully."
+
+    - name: Ensure ollama group exists
+      ansible.builtin.group:
+        name: "{{ ollama_service_group }}"
+        system: true
+        state: present
+
+    - name: Ensure ollama user exists
+      ansible.builtin.user:
+        name: "{{ ollama_service_user }}"
+        group: "{{ ollama_service_group }}"
+        home: "{{ ollama_service_home }}"
+        shell: /usr/sbin/nologin
+        system: true
+        create_home: true
+        state: present
+
+    - name: Ensure ollama models directory exists
+      ansible.builtin.file:
+        path: "{{ ollama_models_dir }}"
+        state: directory
+        owner: "{{ ollama_service_user }}"
+        group: "{{ ollama_service_group }}"
+        mode: '0755'
+
+    - name: Install ollama systemd unit
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/ollama.service.j2"
+        dest: /etc/systemd/system/ollama.service
+        owner: root
+        group: root
+        mode: '0644'
+      register: ollama_unit
+
+    - name: Reload systemd daemon when unit changes
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: ollama_unit.changed
+
+    - name: Restart ollama service when unit changes
+      ansible.builtin.systemd_service:
+        name: ollama
+        state: restarted
+      when: ollama_unit.changed
+
+    - name: Enable and start ollama service
+      ansible.builtin.systemd_service:
+        name: ollama
+        enabled: true
+        state: started
+
