@@ -12,3 +12,16 @@
 
   roles:
     - role: kanidm_client
+
+- name: Prefer Kanidm before pam_unix in common-auth
+  hosts: "{{ target_hosts | default('kanidm_linux_login') }}"
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Swap pam_kanidm and pam_unix auth order in common-auth
+      ansible.builtin.replace:
+        path: /etc/pam.d/common-auth
+        regexp: '^(auth\s+\[success=2 default=ignore\]\s+)pam_unix\.so nullok\n(auth\s+\[success=1 default=ignore\]\s+)pam_kanidm\.so ignore_unknown_user$'
+        replace: '\1pam_kanidm.so ignore_unknown_user\n\2pam_unix.so nullok'
+

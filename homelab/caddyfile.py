@@ -111,6 +111,32 @@ def split_fqdn_list(value: Any, *, debug: bool = False) -> list[tuple[str, int |
     return values
 
 
+def normalize_exposure(value: Any) -> str:
+    exposure = as_str(value).strip().lower().replace("_", "-")
+    if exposure in {"trusted", "tailnet-only", "non-public"}:
+        return "trusted"
+    return exposure or "public"
+
+
+def trusted_frontend_hostname(frontend_hostname: str, tailnet_domain: str) -> str | None:
+    host = (frontend_hostname or "").strip().lower().rstrip(".")
+    tailnet = (tailnet_domain or "").strip().lower().rstrip(".")
+    if not host or not tailnet:
+        return None
+    leftmost = host.split(".", 1)[0].strip()
+    if not leftmost:
+        return None
+    return f"{leftmost}.{tailnet}"
+
+
+def is_fqdn_in_zone(fqdn: str, zone: str) -> bool:
+    host = (fqdn or "").strip().lower().rstrip(".")
+    target_zone = (zone or "").strip().lower().rstrip(".")
+    if not host or not target_zone:
+        return False
+    return host == target_zone or host.endswith(f".{target_zone}")
+
+
 def resolve_host_template_path(*, template_dir: Path | None, fqdn: str) -> Path | None:
     if template_dir is None:
         return None
@@ -391,6 +417,7 @@ def collect_proxy_services_from_sheet(
     services_df: pd.DataFrame,
     *,
     nodes_lookup: dict[str, str] | None,
+    trusted_zone: str | None,
     debug: bool,
 ) -> list[dict[str, Any]]:
     services: list[dict[str, Any]] = []
@@ -416,7 +443,7 @@ def collect_proxy_services_from_sheet(
                 print(f"[debug] Row {idx} protocol={protocol}; skipping", file=sys.stderr)
             continue
 
-        exposure = as_str(row.get("exposure")).lower() or "public"
+        exposure = normalize_exposure(row.get("exposure"))
         ignore_tls = parse_bool(row.get("tls"), default=False)
 
         backend_ip = normalize_ip(as_str(row.get("ip_address")))
@@ -440,8 +467,24 @@ def collect_proxy_services_from_sheet(
         if debug and len(ports) > 1:
             print(f"[debug] Row {idx} has multiple ports; using {default_port}", file=sys.stderr)
 
-        aliases: list[tuple[str, int | None]] = [(frontend_hostname, None)]
-        aliases.extend(split_fqdn_list(row.get("extra_cnames"), debug=debug))
+        aliases: list[tuple[str, int | None]] = []
+        if exposure == "trusted":
+            trusted_primary = trusted_frontend_hostname(frontend_hostname, trusted_zone or "")
+            if not trusted_primary:
+                raise ValueError(
+                    f"Row {idx} exposure=trusted requires a trusted/private zone and a valid Frontend Hostname"
+                )
+            aliases.append((trusted_primary, None))
+            for alias, port_override in split_fqdn_list(row.get("extra_cnames"), debug=debug):
+                if is_fqdn_in_zone(alias, trusted_zone or ""):
+                    aliases.append((alias, port_override))
+                else:
+                    raise ValueError(
+                        f"Row {idx} trusted alias {alias!r} must be in trusted/private zone {trusted_zone!r}"
+                    )
+        else:
+            aliases.append((frontend_hostname, None))
+            aliases.extend(split_fqdn_list(row.get("extra_cnames"), debug=debug))
 
         for fqdn, port_override in dict.fromkeys(aliases):
             effective_port = port_override if port_override is not None else default_port
@@ -633,6 +676,10 @@ def main(argv: list[str] | None = None) -> int:
     config_path = args.config.expanduser().resolve()
     config = load_toml_or_exit(config_path)
     cfg = get_effective_table(config, "caddy", legacy_root_fallback=True)
+    globals_cfg = get_effective_table(config, "globals", legacy_root_fallback=True)
+    tailscale_cfg = get_effective_table(config, "tailscale", legacy_root_fallback=True)
+    tailnet_domain = as_str(get_config_value(tailscale_cfg, "tailnet_domain", "")).strip().lower().rstrip(".")
+    trusted_zone = as_str(get_config_value(globals_cfg, "trusted_zone", "")).strip().lower().rstrip(".")
 
     if not args.sheet_url:
         print("Error: sheet_url is required (set in config or pass --sheet-url).", file=sys.stderr)
@@ -668,7 +715,10 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     proxy_services = collect_proxy_services_from_sheet(
-        services_df, nodes_lookup=nodes_lookup, debug=args.debug
+        services_df,
+        nodes_lookup=nodes_lookup,
+        trusted_zone=trusted_zone,
+        debug=args.debug,
     )
 
     if args.dump_json:
@@ -677,23 +727,77 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Saved normalized services JSON to {json_path}")
 
     zones_config = normalize_zone_configs(cfg)
-    # Tailscale zones are not proxied through Caddy; filter them out.
-    zones_config = [z for z in zones_config if z["tls_mode"] != "tailscale"]
-    zones = [zone_cfg["zone"] for zone_cfg in zones_config]
-    if not zones:
+    if not zones_config:
         print(
             "Error: no zones configured. Provide 'caddy_zones' in config.toml.",
             file=sys.stderr,
         )
         return 2
 
-    zone_map_services: dict[str, list[dict[str, Any]]] = {zone: [] for zone in zones}
-    zone_handler_services: dict[str, list[dict[str, Any]]] = {zone: [] for zone in zones}
+    trusted_zone_cfgs = [
+        zone_cfg
+        for zone_cfg in zones_config
+        if zone_cfg.get("zone", "").strip().lower().rstrip(".") == trusted_zone
+    ]
+
+    has_trusted_services = any(svc.get("exposure") == "trusted" for svc in proxy_services)
+    trusted_zone_name = trusted_zone_cfgs[0]["zone"] if trusted_zone_cfgs else ""
+    public_zones_cfg = [zone_cfg for zone_cfg in zones_config if zone_cfg.get("zone") != trusted_zone_name]
+    trusted_zones = [trusted_zone_name] if trusted_zone_name else []
+    public_zones = [zone_cfg["zone"] for zone_cfg in public_zones_cfg]
+    has_public_services = any(svc.get("exposure") != "trusted" for svc in proxy_services)
+
+    if has_trusted_services and not trusted_zone:
+        print(
+            "Error: trusted/private zone is required when Services rows use exposure=trusted "
+            "(set [globals].trusted_zone).",
+            file=sys.stderr,
+        )
+        return 2
+
+    if has_trusted_services and len(trusted_zone_cfgs) != 1:
+        print(
+            "Error: exactly one caddy_zones entry must match the trusted/private zone "
+            "when exposure=trusted services exist.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if has_trusted_services and tailnet_domain and is_fqdn_in_zone(tailnet_domain, trusted_zone):
+        print(
+            "Error: trusted/private zone must be distinct from [tailscale].tailnet_domain "
+            "for hard-cutover naming.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if has_trusted_services:
+        trusted_mode = str(trusted_zone_cfgs[0].get("tls_mode", "cloudflare")).strip().lower()
+        if trusted_mode == "tailscale":
+            print(
+                "Error: trusted/private zone cannot use tls_mode='tailscale'. "
+                "Use a non-tailnet private zone for trusted services.",
+                file=sys.stderr,
+            )
+            return 2
+
+    if has_public_services and not public_zones:
+        print(
+            "Error: at least one non-tailscale caddy_zones entry is required for non-trusted services.",
+            file=sys.stderr,
+        )
+        return 2
+
+    all_zones = [zone_cfg["zone"] for zone_cfg in zones_config]
+    zone_map_services: dict[str, list[dict[str, Any]]] = {zone: [] for zone in all_zones}
+    zone_handler_services: dict[str, list[dict[str, Any]]] = {zone: [] for zone in all_zones}
     host_template_dir = template_path.parent
 
     unmatched: list[str] = []
     for svc in proxy_services:
-        zone = determine_zone(svc["fqdn"], zones)
+        exposure = svc.get("exposure")
+        candidate_zones = trusted_zones if exposure == "trusted" else public_zones
+        zone = determine_zone(svc["fqdn"], candidate_zones)
         if not zone:
             unmatched.append(svc["fqdn"])
             continue

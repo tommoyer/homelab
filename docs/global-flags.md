@@ -11,9 +11,8 @@ The homelab CLI now supports global `--debug` and `--apply` flags that work acro
 ```bash
 # Apply changes across all commands that support it
 python -m homelab --apply deploy hostname
-python -m homelab --apply pihole
+python -m homelab --apply dns
 python -m homelab --apply caddy
-python -m homelab --apply dnscontrol
 
 # Enable debug logging across all commands
 python -m homelab --debug deploy hostname
@@ -21,7 +20,7 @@ python -m homelab --debug mikrotik
 
 # Combine both flags
 python -m homelab --debug --apply deploy hostname
-python -m homelab --apply --debug pihole
+python -m homelab --apply --debug dns
 
 # Run mode with global flags
 python -m homelab --apply run --pihole --caddy
@@ -53,7 +52,7 @@ The `run` mode uses only global `--apply`:
 python -m homelab --apply run
 
 # Apply specific features with debug
-python -m homelab --debug --apply run --pihole --dnscontrol
+python -m homelab --debug --apply run --dns
 ```
 
 ## Benefits
@@ -81,9 +80,8 @@ python -m homelab deploy hostname --debug --apply
 
 ```bash
 # One flag applies to all
-python -m homelab --apply pihole
+python -m homelab --apply dns
 python -m homelab --apply caddy
-python -m homelab --apply dnscontrol
 
 # Clear and consistent
 python -m homelab --debug --apply deploy hostname
