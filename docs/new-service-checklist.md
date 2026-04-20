@@ -13,6 +13,6 @@
     - Ansible playbook
     - Python Homelab: Deploy (preferred method)
 3. Run the automation scripts:
-    - Python Homelab: Pihole, Caddy, Mikrotik, and dnscontrol
+    - Python Homelab: DNS, Caddy, and Mikrotik
 4. Deploy the generated service files for Mikrotik manually
 5. Configure any backups

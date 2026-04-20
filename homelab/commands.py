@@ -1,14 +1,6 @@
 from __future__ import annotations
 
-from . import (
-               caddyfile,
-               deploy,
-               dnscontrol,
-               mikrotik_prompt,
-               pihole,
-               subnet_assign,
-               tailscale_install,
-)
+from . import caddyfile, deploy, dns, mikrotik_prompt, subnet_assign, tailscale_install
 
 # Central registry of homelab CLI commands.
 #
@@ -19,8 +11,7 @@ from . import (
 # correspond to a single module.
 COMMANDS: dict[str, tuple[str, object]] = {
     "run": ("Run multiple features", object()),
-    "pihole": ("Generate/apply Pi-hole config", pihole),
-    "dnscontrol": ("Generate dnscontrol files for Cloudflare public DNS", dnscontrol),
+    "dns": ("Generate/apply public and internal DNS records", dns),
     "mikrotik": ("Prompt-driven MikroTik command generator (single or batch)", mikrotik_prompt),
     "caddy": ("Generate/deploy Caddyfile from Google Sheets", caddyfile),
     "deploy": ("Deploy a complete node/service", deploy),

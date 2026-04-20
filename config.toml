@@ -49,6 +49,11 @@ ssh_authorized_key_file = "~/.ssh/id_rsa.pub"
 
 pve_scripts_base_url = "https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/"
 
+# Private DNS zone used when generating trusted exposure aliases from Services rows:
+#   <frontend_hostname>.<trusted_zone>
+# This trusted/private zone is also consumed by the Caddy generator.
+trusted_zone = "ts.moyer.wtf"
+
 [tailscale]
 # Tailscale integration for transparent host resolution.
 # When enabled, hostnames are resolved against the Tailnet peer list first,
@@ -96,16 +101,34 @@ proxmox_helper_script_url = "https://raw.githubusercontent.com/community-scripts
 template = "./templates/pihole/pihole.toml.j2"
 output = "./generated/pihole/pihole.toml"
 
-# Zone used when generating trusted exposure aliases from Services rows:
-#   <frontend_hostname>.<trusted_zone>
-trusted_zone = "moyer.wtf"
-
 # Pi-hole instance SSH settings (used with --apply)
 pihole_user = "root"
 pihole_host = "pihole"
 
 # Whether to use sudo for remote operations during --apply.
 use_sudo = false
+
+[dns]
+# Unified DNS command settings (`python -m homelab dns`).
+# Exposure values in Services must be exactly one of: public, private, local.
+#
+# Public target writes Cloudflare dnscontrol inputs (defaults below can still be
+# overridden by [dnscontrol] settings).
+#
+# Internal targets (private/local) render Pi-hole TOML and optionally apply it
+# over SSH (defaults below can still be overridden by [pihole] settings).
+#
+# Optional examples:
+# output_dir = "./generated/dnscontrol"
+# dnsconfig_output = "./generated/dnscontrol/dnsconfig.js"
+# creds_output = "./generated/dnscontrol/creds.json"
+# template = "./templates/pihole/pihole.toml.j2"
+# output = "./generated/pihole/pihole.toml"
+# pihole_user = "root"
+# pihole_host = "pihole"
+# use_sudo = false
+# cloudflare_token_env = "CLOUDFLARE_API_TOKEN"
+# cloudflare_account_id_env = "CLOUDFLARE_ACCOUNT_ID"
 
 [dnscontrol]
 # dnscontrol file generator for Cloudflare public records.
@@ -179,7 +202,6 @@ dmz     = { interface = "vlan20-dmz" }
 homelab = { interface = "vlan30-homelab" }
 hivemind = { interface = "vlan100-clients" }
 
-
 [caddy]
 # Caddyfile generator configuration.
 # This section inherits from [globals] (e.g. sheet_url/nodes_gid) unless overridden here.
@@ -195,11 +217,13 @@ output = "./generated/caddy/Caddyfile"
 work_dir = "./generated/caddy/downloads"
 # dump_json = false
 
+caddy_host = "caddy"
+
 # Zones
 caddy_zones = [
   { zone = "moyer.wtf", wildcard = true, redirect_www = false },
   { zone = "thomasmoyer.org", wildcard = true, redirect_www = false },
-  { zone = "duckbill-frog.ts.net", wildcard = true, redirect_www = false, tls_mode = "tailscale" }
+  { zone = "ts.moyer.wtf", wildcard = true, redirect_www = false }
 ]
 
 [caddy.caddy_deploy]

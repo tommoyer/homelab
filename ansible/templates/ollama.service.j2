@@ -11,6 +11,10 @@ WorkingDirectory={{ ollama_service_home }}
 Environment=HOME={{ ollama_service_home }}
 Environment=OLLAMA_HOST={{ ollama_host }}
 Environment=OLLAMA_MODELS={{ ollama_models_dir }}
+Environment=HSA_OVERRIDE_GFX_VERSION=11.0.0
+Environment=ROCR_VISIBLE_DEVICES=0
+Environment=OLLAMA_LIBRARY_PATH={{ ollama_rocm_root_path }}:{{ ollama_rocm_lib_path }}
+Environment=LD_LIBRARY_PATH={{ ollama_rocm_lib_path }}:$LD_LIBRARY_PATH
 ExecStart={{ ollama_exec_path }} serve
 Restart=always
 RestartSec=3

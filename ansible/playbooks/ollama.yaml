@@ -88,19 +88,17 @@
       ansible.builtin.apt:
         update_cache: yes
 
-    - name: Install ROCm meta-package
+    - name: Install ROCm packages
       ansible.builtin.apt:
-        name: rocm
+        name:
+          - rocm
+          - rocm-libs
+          - rocm-dev
         state: present
 
     - name: Reboot notice
       ansible.builtin.debug:
         msg: "ROCm and firmware installed. A reboot may be required for changes to take effect."
-
-- hosts: "{{ target_hosts | default('ollama') }}"
-  become: true
-  roles:
-    - andrewrothstein.ollama
 
 - hosts: "{{ target_hosts | default('ollama') }}"
   become: true
@@ -110,18 +108,81 @@
     ollama_service_home: /var/lib/ollama
     ollama_models_dir: /var/lib/ollama/.ollama/models
     ollama_host: 0.0.0.0:11434
+    ollama_exec_path: /usr/bin/ollama
+    ollama_standard_package_url: https://ollama.com/download/ollama-linux-amd64.tar.zst
+    ollama_standard_archive_path: /tmp/ollama-linux-amd64.tar.zst
+    ollama_rocm_package_url: https://ollama.com/download/ollama-linux-amd64-rocm.tar.zst
+    ollama_rocm_archive_path: /tmp/ollama-linux-amd64-rocm.tar.zst
+    ollama_install_prefix: /usr
+    ollama_rocm_lib_candidates:
+      - /usr/lib/ollama/rocm
+      - /usr/lib/ollama/rocm/lib
+      - /usr/local/lib/ollama/rocm
+      - /usr/lib/ollama/lib/rocm
+      - /usr/local/lib/ollama/rocm/lib
+      - /usr/local/lib/ollama/lib/rocm
   tasks:
-    - name: Resolve ollama executable path
-      ansible.builtin.command: command -v ollama
-      register: ollama_exe_cmd
-      changed_when: false
-      failed_when: false
+    - name: Install archive prerequisites
+      ansible.builtin.apt:
+        name:
+          - zstd
+        state: present
 
-    - name: Set ollama executable path fact
+    - name: Download standard ollama package
+      ansible.builtin.get_url:
+        url: "{{ ollama_standard_package_url }}"
+        dest: "{{ ollama_standard_archive_path }}"
+        mode: '0644'
+
+    - name: Extract standard ollama package to /usr
+      ansible.builtin.unarchive:
+        src: "{{ ollama_standard_archive_path }}"
+        dest: "{{ ollama_install_prefix }}"
+        remote_src: true
+
+    - name: Download extra ollama ROCm package
+      ansible.builtin.get_url:
+        url: "{{ ollama_rocm_package_url }}"
+        dest: "{{ ollama_rocm_archive_path }}"
+        mode: '0644'
+
+    - name: Extract ROCm add-on package to /usr
+      ansible.builtin.unarchive:
+        src: "{{ ollama_rocm_archive_path }}"
+        dest: "{{ ollama_install_prefix }}"
+        remote_src: true
+
+    - name: Probe ROCm runtime candidate directories
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ ollama_rocm_lib_candidates }}"
+      register: ollama_rocm_candidate_stats
+
+    - name: Select detected ROCm runtime library path
       ansible.builtin.set_fact:
-        ollama_exec_path: "{{ (ollama_exe_cmd.stdout | trim) if (ollama_exe_cmd.stdout | trim | length > 0) else '/usr/local/bin/ollama' }}"
+        ollama_rocm_lib_path: >-
+          {{
+            (
+              ollama_rocm_candidate_stats.results
+              | selectattr('stat.exists', 'equalto', true)
+              | selectattr('stat.isdir', 'equalto', true)
+              | map(attribute='stat.path')
+              | list
+              | first
+            ) | default('')
+          }}
 
-    - name: Check resolved ollama executable path
+    - name: Fail if ROCm runtime directory is missing
+      ansible.builtin.assert:
+        that:
+          - ollama_rocm_lib_path | length > 0
+        fail_msg: "ROCm Ollama runtime was not found in any candidate path: {{ ollama_rocm_lib_candidates | join(', ') }}"
+
+    - name: Set ROCm runtime root path
+      ansible.builtin.set_fact:
+        ollama_rocm_root_path: "{{ ollama_rocm_lib_path | dirname }}"
+
+    - name: Verify ollama executable exists
       ansible.builtin.stat:
         path: "{{ ollama_exec_path }}"
       register: ollama_exec_stat
@@ -131,7 +192,7 @@
         that:
           - ollama_exec_stat.stat.exists
           - ollama_exec_stat.stat.executable
-        fail_msg: "Ollama executable not found at {{ ollama_exec_path }}. Ensure role andrewrothstein.ollama completed successfully."
+        fail_msg: "Ollama executable not found at {{ ollama_exec_path }} after archive install."
 
     - name: Ensure ollama group exists
       ansible.builtin.group:
@@ -139,10 +200,24 @@
         system: true
         state: present
 
+    - name: Ensure render group exists
+      ansible.builtin.group:
+        name: render
+        state: present
+
+    - name: Ensure video group exists
+      ansible.builtin.group:
+        name: video
+        state: present
+
     - name: Ensure ollama user exists
       ansible.builtin.user:
         name: "{{ ollama_service_user }}"
         group: "{{ ollama_service_group }}"
+        groups:
+          - render
+          - video
+        append: true
         home: "{{ ollama_service_home }}"
         shell: /usr/sbin/nologin
         system: true

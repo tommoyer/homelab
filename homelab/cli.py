@@ -23,7 +23,7 @@ def _print_help() -> None:
     print("Unified CLI for this homelab repo.\n")
     print("global options:")
     print("  --debug           Enable verbose debug logging to stderr")
-    print("  --apply           Apply changes (deploy, pihole, caddy, dnscontrol)")
+    print("  --apply           Apply changes (deploy, dns, caddy)")
     print("")
     print("commands:")
     width = max(len(name) for name in COMMANDS)
@@ -78,7 +78,7 @@ def _build_run_parser() -> argparse.ArgumentParser:
     )
 
     # If any of these are set, we treat it as an explicit allow-list.
-    parser.add_argument("--pihole", action="store_true", help="Include Pi-hole config generation/apply")
+    parser.add_argument("--dns", action="store_true", help="Include DNS generation/apply")
     parser.add_argument(
         "--mikrotik",
         action="store_true",
@@ -93,14 +93,9 @@ def _build_run_parser() -> argparse.ArgumentParser:
         "--tailnet",
         default=None,
         help=(
-            "Override Tailscale tailnet domain for Pi-hole trusted CNAME targets "
-            "(forwarded to pihole --tailnet)"
+            "Override Tailscale tailnet domain for private DNS targets "
+            "(forwarded to dns --tailnet)"
         ),
-    )
-    parser.add_argument(
-        "--dnscontrol",
-        action="store_true",
-        help="Include dnscontrol public DNS generation/apply",
     )
     parser.add_argument(
         "--tailscale-install",
@@ -109,10 +104,9 @@ def _build_run_parser() -> argparse.ArgumentParser:
     )
 
     # Optional explicit disables.
-    parser.add_argument("--no-pihole", action="store_true", help="Exclude Pi-hole")
+    parser.add_argument("--no-dns", action="store_true", help="Exclude DNS")
     parser.add_argument("--no-mikrotik", action="store_true", help="Exclude MikroTik prompt generator")
     parser.add_argument("--no-caddy", action="store_true", help="Exclude Caddy")
-    parser.add_argument("--no-dnscontrol", action="store_true", help="Exclude dnscontrol")
     parser.add_argument("--no-tailscale-install", action="store_true", help="Exclude tailscale_install")
 
     return parser
@@ -123,17 +117,15 @@ def _plan_run(argv: list[str]) -> _RunPlan:
     args = parser.parse_args(argv)
 
     explicit_enables = {
-        "pihole": bool(args.pihole),
+        "dns": bool(args.dns),
         "mikrotik": bool(args.mikrotik),
         "caddy": bool(args.caddy),
-        "dnscontrol": bool(args.dnscontrol),
         "tailscale_install": bool(getattr(args, "tailscale_install", False)),
     }
     explicit_disables = {
-        "pihole": bool(args.no_pihole),
+        "dns": bool(args.no_dns),
         "mikrotik": bool(args.no_mikrotik),
         "caddy": bool(args.no_caddy),
-        "dnscontrol": bool(args.no_dnscontrol),
         "tailscale_install": bool(getattr(args, "no_tailscale_install", False)),
     }
 
@@ -154,9 +146,8 @@ def _plan_run(argv: list[str]) -> _RunPlan:
         name
         for name in [
             "mikrotik",
-            "pihole",
+            "dns",
             "caddy",
-            "dnscontrol",
             "tailscale_install",
         ]
         if name in features
@@ -187,7 +178,7 @@ def _run_mode(argv: list[str], *, debug: bool, apply: bool) -> int:
                 if debug:
                     f_argv.append("--_debug")
                 code = int(module.main(f_argv))  # type: ignore[attr-defined]
-            elif feature == "pihole":
+            elif feature == "dns":
                 f_argv = []
                 if debug:
                     f_argv.append("--_debug")
@@ -197,13 +188,6 @@ def _run_mode(argv: list[str], *, debug: bool, apply: bool) -> int:
                     f_argv.extend(["--tailnet", plan.tailnet])
                 code = int(module.main(f_argv))  # type: ignore[attr-defined]
             elif feature == "caddy":
-                f_argv = []
-                if debug:
-                    f_argv.append("--_debug")
-                if plan.apply:
-                    f_argv.append("--_apply")
-                code = int(module.main(f_argv))  # type: ignore[attr-defined]
-            elif feature == "dnscontrol":
                 f_argv = []
                 if debug:
                     f_argv.append("--_debug")
@@ -267,12 +251,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # Commands that support --debug
     if debug:
-        if command in {"caddy", "mikrotik", "deploy", "pihole", "dnscontrol", "tailscale_install"}:
+        if command in {"caddy", "mikrotik", "deploy", "dns", "tailscale_install"}:
             forwarded_flags.append("--_debug")
 
     # Commands that support --apply
     if apply:
-        if command in {"deploy", "pihole", "caddy", "dnscontrol", "tailscale_install"}:
+        if command in {"deploy", "dns", "caddy", "tailscale_install"}:
             forwarded_flags.append("--_apply")
     
     if forwarded_flags:

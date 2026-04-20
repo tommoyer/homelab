@@ -66,8 +66,7 @@ def _discover_flags(command_name: str, module: object) -> list[FlagConfig]:
     
     # Map commands to their relevant flags
     command_flag_map = {
-        "pihole": ["--sudo", "--tailnet"],
-        "dnscontrol": [],
+        "dns": ["--sudo", "--tailnet"],
         "caddy": [],
         "deploy": [],
         "mikrotik": [],
@@ -171,7 +170,7 @@ def _main_menu(
         apply_toggle = "[×]" if global_flags.apply else "[ ]"
         apply_label = (
             f"{prefix} {apply_toggle} --apply         "
-            "Apply changes (deploy, pihole, caddy, dnscontrol)"
+            "Apply changes (deploy, dns, caddy)"
         )
         stdscr.addstr(y, 0, apply_label)
         y += 1
@@ -357,11 +356,11 @@ def main(argv: list[str] | None = None) -> int:
         
         # Add global flags if not already present in command-specific flags
         if global_flags.debug and "--_debug" not in command_argv:
-            if selected_entry.name in {"caddy", "mikrotik", "deploy", "pihole", "dnscontrol", "tailscale_install"}:
+            if selected_entry.name in {"caddy", "mikrotik", "deploy", "dns", "tailscale_install"}:
                 command_argv.insert(0, "--_debug")
         
         if global_flags.apply and "--_apply" not in command_argv:
-            if selected_entry.name in {"deploy", "pihole", "caddy", "dnscontrol", "tailscale_install"}:
+            if selected_entry.name in {"deploy", "dns", "caddy", "tailscale_install"}:
                 command_argv.insert(0, "--_apply")
         
         print(f"\n{'═' * 60}")

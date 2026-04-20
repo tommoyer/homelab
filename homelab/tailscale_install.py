@@ -23,7 +23,7 @@ from .config import (
     resolve_path_relative_to_config,
 )
 from .resolver import build_resolver
-from .sheets import as_str, df_with_normalized_columns, get_sheet_df
+from .sheets import as_str, df_with_normalized_columns, get_sheet_df, parse_bool
 from .ssh import prefix_sshpass, require_command, sshpass_env_from_password_env
 from .tailscale import get_tailscale_lookup_safe, is_on_tailnet
 
@@ -429,6 +429,9 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
     for _, row in nodes_df.iterrows():
         hostname = as_str(row.get("hostname")).strip()
         if not hostname:
+            continue
+
+        if parse_bool(row.get("skip_tailscale"), default=False):
             continue
 
         method = _normalize_method(row.get("tailscale_install_method"))
