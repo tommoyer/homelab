@@ -1,0 +1,18 @@
+services:
+  web:
+    image: gitea.priv.moyer.wtf/tmoyer/services:latest
+    environment:
+      SERVICES_CSV_URL: "https://docs.google.com/spreadsheets/d/1f4emn4uIPscEgOHtgmETODlTvz1eh2xZlnpBBNGQlWA/export?format=csv&gid=157827580#gid=157827580"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/healthz', timeout=5).read()
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped

@@ -9,7 +9,7 @@ ansible_python_interpreter: /usr/bin/python3
 
 # Network defaults
 dns_servers:
-  - 192.168.10.11
+  - 192.168.100.2
 
 # Service defaults
 service_restart_policy: unless-stopped

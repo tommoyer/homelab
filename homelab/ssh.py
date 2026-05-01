@@ -98,3 +98,53 @@ def ssh_run(
         env=env,
     )
 
+
+def deploy_file_over_ssh(
+    *,
+    local_path: str | Path,
+    remote_path: str,
+    host: str,
+    username: str,
+    port: int = 22,
+    identity_file: str | Path | None = None,
+    control_prefix: str = "deploy",
+    pre_copy_remote_path: str | None = None,
+    post_copy_command: str | None = None,
+) -> None:
+    require_command("scp")
+    require_command("ssh")
+
+    identity_path: Path | None = Path(identity_file) if identity_file is not None else None
+    target = f"{username}@{host}"
+    upload_path = pre_copy_remote_path or remote_path
+
+    control_path = ssh_control_path(
+        prefix=control_prefix,
+        username=username,
+        host=host,
+        port=port,
+    )
+    ssh_args = ssh_base_args(control_path=control_path, port=port, identity_file=identity_path)
+    scp_args_list = scp_base_args(control_path=control_path, port=port, identity_file=identity_path)
+
+    ssh_start_master(ssh_args=ssh_args, target=target, env=None)
+    try:
+        logger.debug(
+            "deploy_file_over_ssh: scp %s -> %s:%s",
+            str(local_path),
+            target,
+            upload_path,
+        )
+        subprocess.run([*scp_args_list, str(local_path), f"{target}:{upload_path}"], check=True)
+
+        if post_copy_command:
+            logger.debug("deploy_file_over_ssh: ssh %s: %s", target, post_copy_command)
+            ssh_run(
+                ssh_args=ssh_args,
+                target=target,
+                command=post_copy_command,
+                env=None,
+            )
+    finally:
+        ssh_stop_master(ssh_args=ssh_args, target=target, env=None)
+

@@ -6,7 +6,6 @@ import ipaddress
 import json
 import logging
 import os
-import re
 import shlex
 import subprocess
 import sys
@@ -23,7 +22,14 @@ from .config import (
     resolve_path_relative_to_config,
 )
 from .resolver import HostResolver, build_resolver
-from .sheets import as_str, df_with_normalized_columns, get_sheet_df, load_nodes_lookup
+from .sheets import (
+    as_str,
+    configure_sheet_csv_retention,
+    df_with_normalized_columns,
+    get_sheet_df,
+    load_nodes_lookup,
+    normalize_int_cell,
+)
 from .ssh import prefix_sshpass, require_command, sshpass_env_from_password_env
 
 logger = logging.getLogger(__name__)
@@ -85,42 +91,6 @@ def run_ansible_playbooks(hostname: str, config_path: Path, settings: dict, node
     return success
 
 
-def _normalize_int_like_string(value: object) -> str:
-    """Normalize values that should be integers but may arrive as floats/strings.
-
-    Examples:
-      - 20.0 -> "20"
-      - "20.0" -> "20"
-      - " 20 " -> "20"
-    """
-
-    if value is None:
-        return ""
-    try:
-        if pd.isna(value):
-            return ""
-    except Exception:
-        pass
-
-    if isinstance(value, bool):
-        return "1" if value else "0"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        if value.is_integer():
-            return str(int(value))
-        return str(value).strip()
-
-    cleaned = str(value).strip()
-    if not cleaned:
-        return ""
-    # Common pandas CSV case: integer column becomes float-like string.
-    m = re.match(r"^(\d+)\.0+$", cleaned)
-    if m:
-        return m.group(1)
-    return cleaned
-
-
 def _parse_playbooks_value(value: object) -> list[str]:
     """
     Parse a semicolon-separated Playbooks cell into a list of playbook names.
@@ -146,7 +116,6 @@ def _parse_playbooks_value(value: object) -> list[str]:
         return []
     
     return [p.strip() for p in playbooks_str.split(";") if p.strip()]
-
 
 
 def _select_deployable_node(nodes_df: pd.DataFrame) -> str | None:
@@ -242,7 +211,6 @@ def _select_deployable_node(nodes_df: pd.DataFrame) -> str | None:
         return None
 
 
-
 def _add_parser_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "hostname",
@@ -269,6 +237,13 @@ def _add_parser_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--_debug",
         dest="debug",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+
+    parser.add_argument(
+        "--_keep",
+        dest="keep",
         action="store_true",
         help=argparse.SUPPRESS,
     )
@@ -407,18 +382,18 @@ def build_node_template_data(row: pd.Series) -> dict:
     interface = as_str(row.get("interface"))
     mac = as_str(row.get("mac_address"))
 
-    vlan_id = _normalize_int_like_string(row.get("vlan_id"))
+    vlan_id = normalize_int_cell(row.get("vlan_id"))
 
     # New resource columns: Cores, RAM, Disk
     # Keep values as normalized int-like strings so templates can use them directly.
-    cores = _normalize_int_like_string(row.get("cores"))
-    ram = _normalize_int_like_string(row.get("ram"))
-    disk = _normalize_int_like_string(row.get("disk"))
+    cores = normalize_int_cell(row.get("cores"))
+    ram = normalize_int_cell(row.get("ram"))
+    disk = normalize_int_cell(row.get("disk"))
 
     # These aren't in your provided sheet headers, but we keep them as optional
     # keys so templates can reference them without StrictUndefined errors.
     gateway = as_str(row.get("gateway"))
-    vlan = _normalize_int_like_string(row.get("vlan"))
+    vlan = normalize_int_cell(row.get("vlan"))
     # Per-host DNS server (sheet column "DNS Server").
     ns = as_str(row.get("dns_server"))
 
@@ -1017,6 +992,9 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
     settings = dict(settings)
     settings["apply"] = bool(getattr(args, "apply", False))
 
+    keep_downloads = bool(getattr(args, "keep", False)) or bool(settings.get("keep", False))
+    configure_sheet_csv_retention(keep=keep_downloads)
+
     render_dir: Path | None = getattr(args, "render_dir", None)
     if render_dir is not None:
         settings["render_dir"] = resolve_path_relative_to_config(config_path, render_dir)
@@ -1049,6 +1027,9 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
         logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
         logger.setLevel(logging.DEBUG)
         logger.debug("Debug logging enabled")
+
+    if keep_downloads:
+        logger.debug("Keeping downloaded sheet CSV files enabled")
     
     logger.info("Starting deployment for node: %s", args.hostname)
 
@@ -1072,17 +1053,19 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
     if isinstance(node_cfg.get("node"), dict):
         node_cfg["node"]["bridge"] = bridge
 
-    # Extract deployment fields from Nodes sheet
-    row = nodes_df[df_with_normalized_columns(nodes_df)["hostname"].astype(str).str.strip().str.lower() == args.hostname.strip().lower()].iloc[0]
+    # Extract deployment fields from normalized Nodes sheet
+    df_norm = df_with_normalized_columns(nodes_df)
+    mask = df_norm["hostname"].astype(str).str.strip().str.lower() == args.hostname.strip().lower()
+    row = df_norm[mask].iloc[0]
     logger.debug("Node config row for hostname '%s': %s", args.hostname, row.to_dict())
-    
+
     script_url = as_str(node_cfg.get("script_url", "")).strip()
     managed = as_str(row.get("managed", "")).lower() in {"true", "yes", "1"}
     playbooks_value = row.get("playbooks", "")
-    
-    logger.debug("Deployment config: script_url='%s', managed=%s, playbooks='%s'", 
+
+    logger.debug("Deployment config: script_url='%s', managed=%s, playbooks='%s'",
                  script_url, managed, playbooks_value)
-    logger.info("Deployment plan for '%s': run_helper=%s, run_ansible=%s", 
+    logger.info("Deployment plan for '%s': run_helper=%s, run_ansible=%s",
                 args.hostname, bool(script_url), managed)
 
     # Determine what to run

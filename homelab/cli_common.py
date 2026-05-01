@@ -14,8 +14,13 @@ from typing import Any
 
 from .config import get_config_value, get_table, pre_parse_config
 from .logging_utils import configure_logging
+from .sheets import configure_sheet_csv_retention
 
 logger = logging.getLogger(__name__)
+
+SENTINEL_DEBUG = "--_debug"
+SENTINEL_APPLY = "--_apply"
+SENTINEL_KEEP = "--_keep"
 
 
 def add_config_argument(
@@ -49,7 +54,7 @@ def add_debug_argument(
         default: Default debug value (typically from config)
     """
     parser.add_argument(
-        "--_debug",
+        SENTINEL_DEBUG,
         dest="debug",
         action="store_true",
         default=default,
@@ -70,8 +75,27 @@ def add_apply_argument(
         help_text: Help text for the --apply argument
     """
     parser.add_argument(
-        "--_apply",
+        SENTINEL_APPLY,
         dest="apply",
+        action="store_true",
+        default=default,
+        help=argparse.SUPPRESS,
+    )
+
+
+def add_keep_argument(
+    parser: argparse.ArgumentParser,
+    default: bool = False,
+) -> None:
+    """Add internal keep-downloads forwarding argument to parser.
+
+    Args:
+        parser: ArgumentParser instance to modify
+        default: Default keep value (typically from config)
+    """
+    parser.add_argument(
+        SENTINEL_KEEP,
+        dest="keep",
         action="store_true",
         default=default,
         help=argparse.SUPPRESS,
@@ -162,7 +186,7 @@ def bootstrap_config_and_logging(
     # Pre-parse debug flag to configure logging before building parser
     debug = False
     if argv:
-        debug = "--_debug" in argv
+        debug = SENTINEL_DEBUG in argv
 
     configure_logging(debug=debug)
 
@@ -171,6 +195,15 @@ def bootstrap_config_and_logging(
 
     globals_cfg = get_table(config, "globals")
     tool_cfg = get_table(config, tool_name) if tool_name else {}
+
+    keep = False
+    if argv:
+        keep = SENTINEL_KEEP in argv
+    if not keep:
+        keep = bool(get_config_value(globals_cfg, "keep", False))
+    if not keep and tool_cfg:
+        keep = bool(get_config_value(tool_cfg, "keep", False))
+    configure_sheet_csv_retention(keep=keep)
 
     return config_path, config, globals_cfg, tool_cfg
 
@@ -204,6 +237,13 @@ def build_base_parser(
         if not default_debug:
             default_debug = bool(get_config_value(globals_cfg, "debug", False))
         add_debug_argument(parser, default=default_debug)
+
+    default_keep = False
+    if tool_cfg:
+        default_keep = bool(get_config_value(tool_cfg, "keep", False))
+    if not default_keep:
+        default_keep = bool(get_config_value(globals_cfg, "keep", False))
+    add_keep_argument(parser, default=default_keep)
 
     return parser
 

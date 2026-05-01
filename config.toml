@@ -52,7 +52,7 @@ pve_scripts_base_url = "https://raw.githubusercontent.com/community-scripts/Prox
 # Private DNS zone used when generating trusted exposure aliases from Services rows:
 #   <frontend_hostname>.<trusted_zone>
 # This trusted/private zone is also consumed by the Caddy generator.
-trusted_zone = "ts.moyer.wtf"
+trusted_zone = "priv.moyer.wtf"
 
 [tailscale]
 # Tailscale integration for transparent host resolution.
@@ -173,6 +173,9 @@ mac_column = "MAC Address"
 # Defaults to [globals].caddy_host if omitted. May also be provided at runtime via --caddy-ip.
 # caddy_ips = ["192.168.20.2"]
 
+# Public WAN IPs used for strict dst-address matching in generated DNAT rules.
+wan_ips = ["207.144.81.217"]
+
 # Interface names (match your RouterOS config).
 dmz_interface = "vlan20-dmz"
 homelab_interface = "vlan30-homelab"
@@ -223,7 +226,7 @@ caddy_host = "caddy"
 caddy_zones = [
   { zone = "moyer.wtf", wildcard = true, redirect_www = false },
   { zone = "thomasmoyer.org", wildcard = true, redirect_www = false },
-  { zone = "ts.moyer.wtf", wildcard = true, redirect_www = false }
+  { zone = "priv.moyer.wtf", wildcard = true, redirect_www = false }
 ]
 
 [caddy.caddy_deploy]

@@ -5,7 +5,6 @@ import argparse
 import json
 import logging
 import re
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,14 +12,15 @@ from typing import Any, cast
 
 import pandas as pd
 
+from .cli_common import bootstrap_config_and_logging
 from .config import (
     get_config_value,
     get_effective_table,
     load_toml_or_exit,
-    pre_parse_config,
     render_jinja_template,
     resolve_path_relative_to_config,
 )
+from .fqdn_utils import determine_zone, normalize_exposure, split_fqdn_list
 from .logging_utils import configure_logging
 from .resolver import build_resolver
 from .sheets import (
@@ -32,15 +32,7 @@ from .sheets import (
     normalize_ports,
     parse_bool,
 )
-from .ssh import (
-    require_command,
-    scp_base_args,
-    ssh_base_args,
-    ssh_control_path,
-    ssh_run,
-    ssh_start_master,
-    ssh_stop_master,
-)
+from .ssh import deploy_file_over_ssh
 
 logger = logging.getLogger(__name__)
 
@@ -72,52 +64,6 @@ def caddy_hostname_label(fqdn: str) -> str:
     return slugify(fqdn.split(".", 1)[0])
 
 
-def split_fqdn_list(value: Any, *, debug: bool = False) -> list[tuple[str, int | None]]:
-    raw = as_str(value)
-    if not raw:
-        return []
-    values: list[tuple[str, int | None]] = []
-    for item in raw.split(";"):
-        token = item.strip()
-        if not token:
-            continue
-
-        fqdn_part = token
-        port_override: int | None = None
-        if ":" in token:
-            fqdn_part, port_part = token.rsplit(":", 1)
-            port_part = port_part.strip()
-            if port_part:
-                try:
-                    parsed_port = int(port_part)
-                    if 1 <= parsed_port <= 65535:
-                        port_override = parsed_port
-                    else:
-                        if debug:
-                            print(
-                                f"[debug] Ignoring invalid extra_cname port {port_part!r} in {token!r}",
-                                file=sys.stderr,
-                            )
-                except ValueError:
-                    if debug:
-                        print(
-                            f"[debug] Ignoring non-integer extra_cname port {port_part!r} in {token!r}",
-                            file=sys.stderr,
-                        )
-
-        fqdn = fqdn_part.strip().lower().rstrip(".")
-        if fqdn:
-            values.append((fqdn, port_override))
-    return values
-
-
-def normalize_exposure(value: Any) -> str:
-    exposure = as_str(value).strip().lower().replace("_", "-")
-    if exposure in {"trusted", "tailnet-only", "non-public"}:
-        return "trusted"
-    return exposure or "public"
-
-
 def trusted_frontend_hostname(frontend_hostname: str, tailnet_domain: str) -> str | None:
     host = (frontend_hostname or "").strip().lower().rstrip(".")
     tailnet = (tailnet_domain or "").strip().lower().rstrip(".")
@@ -127,14 +73,6 @@ def trusted_frontend_hostname(frontend_hostname: str, tailnet_domain: str) -> st
     if not leftmost:
         return None
     return f"{leftmost}.{tailnet}"
-
-
-def is_fqdn_in_zone(fqdn: str, zone: str) -> bool:
-    host = (fqdn or "").strip().lower().rstrip(".")
-    target_zone = (zone or "").strip().lower().rstrip(".")
-    if not host or not target_zone:
-        return False
-    return host == target_zone or host.endswith(f".{target_zone}")
 
 
 def resolve_host_template_path(*, template_dir: Path | None, fqdn: str) -> Path | None:
@@ -198,14 +136,6 @@ def render_host_template_block_lines(
     if debug:
         logger.debug("caddy: host template for %s -> %s", fqdn, template_path.name)
     return lines
-
-
-def determine_zone(hostname: str, zones: list[str]) -> str | None:
-    target = hostname.lower().rstrip(".")
-    matches = [zone for zone in zones if target == zone or target.endswith(f".{zone}")]
-    if not matches:
-        return None
-    return max(matches, key=len)
 
 
 def generate_map_entries(services: list[dict[str, Any]]) -> list[str]:
@@ -475,8 +405,13 @@ def collect_proxy_services_from_sheet(
                     f"Row {idx} exposure=trusted requires a trusted/private zone and a valid Frontend Hostname"
                 )
             aliases.append((trusted_primary, None))
-            for alias, port_override in split_fqdn_list(row.get("extra_cnames"), debug=debug):
-                if is_fqdn_in_zone(alias, trusted_zone or ""):
+            normalized_trusted_zone = (trusted_zone or "").strip().lower().rstrip(".")
+            for alias, port_override in split_fqdn_list(
+                row.get("extra_cnames"),
+                keep_ports=True,
+                debug=debug,
+            ):
+                if determine_zone(alias, [normalized_trusted_zone]) == normalized_trusted_zone:
                     aliases.append((alias, port_override))
                 else:
                     raise ValueError(
@@ -484,7 +419,7 @@ def collect_proxy_services_from_sheet(
                     )
         else:
             aliases.append((frontend_hostname, None))
-            aliases.extend(split_fqdn_list(row.get("extra_cnames"), debug=debug))
+            aliases.extend(split_fqdn_list(row.get("extra_cnames"), keep_ports=True, debug=debug))
 
         for fqdn, port_override in dict.fromkeys(aliases):
             effective_port = port_override if port_override is not None else default_port
@@ -512,34 +447,27 @@ def deploy_caddyfile_mux(
     port: int | None,
     debug: bool,
 ) -> None:
-    require_command("scp")
-    require_command("ssh")
-
-    target = f"{username}@{host}"
     effective_port = port or 22
-    control_path = ssh_control_path(prefix="caddy", username=username, host=host, port=effective_port)
-
-    ssh_args = ssh_base_args(control_path=control_path, port=effective_port, identity_file=None)
-    scp_args_list = scp_base_args(control_path=control_path, port=effective_port, identity_file=None)
-
-    ssh_start_master(ssh_args=ssh_args, target=target, env=None)
-    try:
-        logger.debug("caddy: scp -> %s:%s", target, remote_path)
-        subprocess.run([*scp_args_list, local_path, f"{target}:{remote_path}"], check=True)
-
+    if debug:
+        logger.debug("caddy: deploy -> %s@%s:%s", username, host, remote_path)
         logger.debug("caddy: restart -> %s", restart_command)
-        ssh_run(ssh_args=ssh_args, target=target, command=restart_command, env=None)
-    finally:
-        ssh_stop_master(ssh_args=ssh_args, target=target, env=None)
+
+    deploy_file_over_ssh(
+        local_path=local_path,
+        remote_path=remote_path,
+        host=host,
+        username=username,
+        port=effective_port,
+        control_prefix="caddy",
+        post_copy_command=restart_command,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     repo_root = Path(__file__).resolve().parents[1]
     default_template_dir = repo_root / "templates" / "caddy"
     default_output_dir = repo_root / "generated" / "caddy"
-    config_path, config = pre_parse_config(argv)
-    globals_cfg = get_effective_table(config, "globals", legacy_root_fallback=True)
-    cfg = get_effective_table(config, "caddy", legacy_root_fallback=True)
+    bootstrapped_config_path, config, globals_cfg, cfg = bootstrap_config_and_logging(argv, "caddy")
 
     parser = argparse.ArgumentParser(
         description=(
@@ -550,7 +478,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--config",
         type=Path,
-        default=config_path,
+        default=bootstrapped_config_path,
         help="Path to TOML config file containing default parameters",
     )
     parser.add_argument(
@@ -666,6 +594,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--_keep",
+        dest="keep",
+        action="store_true",
+        default=bool(get_config_value(cfg, "keep", False))
+        or bool(get_config_value(globals_cfg, "keep", False)),
+        help=argparse.SUPPRESS,
+    )
 
     args = parser.parse_args(argv)
 
@@ -674,7 +610,9 @@ def main(argv: list[str] | None = None) -> int:
         logger.debug("caddy: debug enabled")
 
     config_path = args.config.expanduser().resolve()
-    config = load_toml_or_exit(config_path)
+    if config_path != bootstrapped_config_path:
+        config = load_toml_or_exit(config_path)
+
     cfg = get_effective_table(config, "caddy", legacy_root_fallback=True)
     globals_cfg = get_effective_table(config, "globals", legacy_root_fallback=True)
     tailscale_cfg = get_effective_table(config, "tailscale", legacy_root_fallback=True)
@@ -742,9 +680,9 @@ def main(argv: list[str] | None = None) -> int:
 
     has_trusted_services = any(svc.get("exposure") == "trusted" for svc in proxy_services)
     trusted_zone_name = trusted_zone_cfgs[0]["zone"] if trusted_zone_cfgs else ""
-    public_zones_cfg = [zone_cfg for zone_cfg in zones_config if zone_cfg.get("zone") != trusted_zone_name]
     trusted_zones = [trusted_zone_name] if trusted_zone_name else []
-    public_zones = [zone_cfg["zone"] for zone_cfg in public_zones_cfg]
+    all_zones = [zone_cfg["zone"] for zone_cfg in zones_config]
+    public_zones = all_zones
     has_public_services = any(svc.get("exposure") != "trusted" for svc in proxy_services)
 
     if has_trusted_services and not trusted_zone:
@@ -763,7 +701,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    if has_trusted_services and tailnet_domain and is_fqdn_in_zone(tailnet_domain, trusted_zone):
+    if (
+        has_trusted_services
+        and tailnet_domain
+        and determine_zone(tailnet_domain, [trusted_zone]) is not None
+    ):
         print(
             "Error: trusted/private zone must be distinct from [tailscale].tailnet_domain "
             "for hard-cutover naming.",
@@ -783,12 +725,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if has_public_services and not public_zones:
         print(
-            "Error: at least one non-tailscale caddy_zones entry is required for non-trusted services.",
+            "Error: at least one caddy_zones entry is required for non-trusted services.",
             file=sys.stderr,
         )
         return 2
 
-    all_zones = [zone_cfg["zone"] for zone_cfg in zones_config]
     zone_map_services: dict[str, list[dict[str, Any]]] = {zone: [] for zone in all_zones}
     zone_handler_services: dict[str, list[dict[str, Any]]] = {zone: [] for zone in all_zones}
     host_template_dir = template_path.parent

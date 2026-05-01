@@ -5,6 +5,7 @@ import logging
 import sys
 from dataclasses import dataclass
 
+from .cli_common import SENTINEL_APPLY, SENTINEL_DEBUG, SENTINEL_KEEP
 from .commands import COMMANDS
 from .logging_utils import configure_logging
 
@@ -14,16 +15,18 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class _RunPlan:
     apply: bool
+    keep: bool
     tailnet: str | None
     features: list[str]
 
 
 def _print_help() -> None:
-    print("usage: python -m homelab [-h] [--debug] [--apply] <command> [args...]\n")
+    print("usage: python -m homelab [-h] [--debug] [--apply] [--keep] <command> [args...]\n")
     print("Unified CLI for this homelab repo.\n")
     print("global options:")
     print("  --debug           Enable verbose debug logging to stderr")
     print("  --apply           Apply changes (deploy, dns, caddy)")
+    print("  --keep            Keep downloaded Sheets CSV files for debugging")
     print("")
     print("commands:")
     width = max(len(name) for name in COMMANDS)
@@ -32,18 +35,19 @@ def _print_help() -> None:
     print("\nRun: python -m homelab <command> --help")
 
 
-def _parse_global_options(argv: list[str]) -> tuple[bool, bool, list[str]]:
+def _parse_global_options(argv: list[str]) -> tuple[bool, bool, bool, list[str]]:
     """Parse global options that appear before the <command>.
 
     We intentionally only consume options *before* the command name so that
     --debug/--apply are global-only flags.
     
     Returns:
-        (debug, apply, remaining_argv)
+        (debug, apply, keep, remaining_argv)
     """
 
     debug = False
     apply = False
+    keep = False
     rest = list(argv)
 
     while rest and rest[0].startswith("-"):
@@ -61,11 +65,15 @@ def _parse_global_options(argv: list[str]) -> tuple[bool, bool, list[str]]:
             apply = True
             continue
 
+        if flag == "--keep":
+            keep = True
+            continue
+
         print(f"Error: unknown global option: {flag}", file=sys.stderr)
         _print_help()
         raise SystemExit(2)
 
-    return debug, apply, rest
+    return debug, apply, keep, rest
 
 
 def _build_run_parser() -> argparse.ArgumentParser:
@@ -153,14 +161,14 @@ def _plan_run(argv: list[str]) -> _RunPlan:
         if name in features
     ]
 
-    return _RunPlan(apply=False, tailnet=getattr(args, "tailnet", None), features=ordered)
+    return _RunPlan(apply=False, keep=False, tailnet=getattr(args, "tailnet", None), features=ordered)
 
 
-def _run_mode(argv: list[str], *, debug: bool, apply: bool) -> int:
-    logger.debug("run: argv=%r debug=%s apply=%s", argv, debug, apply)
+def _run_mode(argv: list[str], *, debug: bool, apply: bool, keep: bool) -> int:
+    logger.debug("run: argv=%r debug=%s apply=%s keep=%s", argv, debug, apply, keep)
 
     plan = _plan_run(argv)
-    plan = _RunPlan(apply=apply, tailnet=plan.tailnet, features=plan.features)
+    plan = _RunPlan(apply=apply, keep=keep, tailnet=plan.tailnet, features=plan.features)
     logger.debug("run: plan=%r", plan)
     if not plan.features:
         print("Nothing to do (all features disabled)", file=sys.stderr)
@@ -176,30 +184,38 @@ def _run_mode(argv: list[str], *, debug: bool, apply: bool) -> int:
             if feature == "mikrotik":
                 f_argv: list[str] = []
                 if debug:
-                    f_argv.append("--_debug")
+                    f_argv.append(SENTINEL_DEBUG)
+                if plan.keep:
+                    f_argv.append(SENTINEL_KEEP)
                 code = int(module.main(f_argv))  # type: ignore[attr-defined]
             elif feature == "dns":
                 f_argv = []
                 if debug:
-                    f_argv.append("--_debug")
+                    f_argv.append(SENTINEL_DEBUG)
                 if plan.apply:
-                    f_argv.append("--_apply")
+                    f_argv.append(SENTINEL_APPLY)
+                if plan.keep:
+                    f_argv.append(SENTINEL_KEEP)
                 if plan.tailnet:
                     f_argv.extend(["--tailnet", plan.tailnet])
                 code = int(module.main(f_argv))  # type: ignore[attr-defined]
             elif feature == "caddy":
                 f_argv = []
                 if debug:
-                    f_argv.append("--_debug")
+                    f_argv.append(SENTINEL_DEBUG)
                 if plan.apply:
-                    f_argv.append("--_apply")
+                    f_argv.append(SENTINEL_APPLY)
+                if plan.keep:
+                    f_argv.append(SENTINEL_KEEP)
                 code = int(module.main(f_argv))  # type: ignore[attr-defined]
             elif feature == "tailscale_install":
                 f_argv = []
                 if debug:
-                    f_argv.append("--_debug")
+                    f_argv.append(SENTINEL_DEBUG)
                 if plan.apply:
-                    f_argv.append("--_apply")
+                    f_argv.append(SENTINEL_APPLY)
+                if plan.keep:
+                    f_argv.append(SENTINEL_KEEP)
                 code = int(module.main(f_argv))  # type: ignore[attr-defined]
             else:
                 print(f"Error: unknown run feature: {feature}", file=sys.stderr)
@@ -219,12 +235,14 @@ def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
 
-    debug, apply, argv = _parse_global_options(argv)
+    debug, apply, keep, argv = _parse_global_options(argv)
     configure_logging(debug=debug)
     if debug:
         logger.debug("global debug enabled")
     if apply:
         logger.debug("global apply enabled")
+    if keep:
+        logger.debug("global keep enabled")
 
     if not argv or argv[0] in {"-h", "--help"}:
         _print_help()
@@ -236,12 +254,14 @@ def main(argv: list[str] | None = None) -> int:
     if (
         "--debug" in cmd_argv
         or "--apply" in cmd_argv
-        or "--_debug" in cmd_argv
-        or "--_apply" in cmd_argv
+        or "--keep" in cmd_argv
+        or SENTINEL_DEBUG in cmd_argv
+        or SENTINEL_APPLY in cmd_argv
+        or SENTINEL_KEEP in cmd_argv
     ):
         print(
-            "Error: --debug and --apply are global-only flags. Place them before the command, "
-            "e.g. 'python -m homelab --debug --apply <command> ...'",
+            "Error: --debug, --apply, and --keep are global-only flags. Place them before the command, "
+            "e.g. 'python -m homelab --debug --apply --keep <command> ...'",
             file=sys.stderr,
         )
         return 2
@@ -252,12 +272,17 @@ def main(argv: list[str] | None = None) -> int:
     # Commands that support --debug
     if debug:
         if command in {"caddy", "mikrotik", "deploy", "dns", "tailscale_install"}:
-            forwarded_flags.append("--_debug")
+            forwarded_flags.append(SENTINEL_DEBUG)
 
     # Commands that support --apply
     if apply:
         if command in {"deploy", "dns", "caddy", "tailscale_install"}:
-            forwarded_flags.append("--_apply")
+            forwarded_flags.append(SENTINEL_APPLY)
+
+    # Commands that support --keep
+    if keep:
+        if command in {"deploy", "dns", "caddy", "tailscale_install", "mikrotik"}:
+            forwarded_flags.append(SENTINEL_KEEP)
     
     if forwarded_flags:
         cmd_argv = forwarded_flags + cmd_argv
@@ -268,7 +293,9 @@ def main(argv: list[str] | None = None) -> int:
             logger.debug("forwarding global --debug to run-mode subcommands")
         if apply:
             logger.debug("forwarding global --apply to run-mode subcommands")
-        return _run_mode(cmd_argv, debug=debug, apply=apply)
+        if keep:
+            logger.debug("forwarding global --keep to run-mode subcommands")
+        return _run_mode(cmd_argv, debug=debug, apply=apply, keep=keep)
 
     entry = COMMANDS.get(command)
     if entry is None:
