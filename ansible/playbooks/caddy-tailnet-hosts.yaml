@@ -1,0 +1,85 @@
+---
+# Ensure target hosts have a stable /etc/hosts entry for the Caddy node's
+# Tailscale IPv4 address.
+#
+# Usage:
+#   ansible-playbook playbooks/caddy-tailnet-hosts.yaml
+#   ansible-playbook playbooks/caddy-tailnet-hosts.yaml -e target_hosts=mygroup
+#   ansible-playbook playbooks/caddy-tailnet-hosts.yaml \
+#     -e 'caddy_hosts_extra_names=["gitea.priv.moyer.wtf"]'
+#
+# Variables:
+#   target_hosts             Hosts/group that should receive the /etc/hosts entry.
+#                            Defaults to services.
+#   caddy_host               Inventory host name for the Caddy node. Default: caddy.
+#   caddy_hosts_extra_names  Additional hostnames to map to the resolved Caddy
+#                            Tailscale IPv4. Default: [].
+#
+- name: Ensure Caddy tailnet hosts entry exists
+  hosts: "{{ target_hosts | default('services') }}"
+  gather_facts: false
+  become: true
+
+  vars:
+    caddy_host: caddy
+    caddy_hosts_extra_names: []
+
+  tasks:
+    - name: Validate Caddy host exists in inventory
+      ansible.builtin.assert:
+        that:
+          - caddy_host in hostvars
+        fail_msg: >-
+          Inventory host '{{ caddy_host }}' was not found. Pass -e caddy_host=<host>
+          or update the inventory.
+      run_once: true
+
+    - name: Resolve Caddy tailnet IPv4 address
+      ansible.builtin.command: tailscale ip -4
+      delegate_to: "{{ caddy_host }}"
+      become: false
+      register: _caddy_tailscale_ip_cmd
+      changed_when: false
+      run_once: true
+
+    - name: Validate Caddy tailnet IPv4 resolution
+      ansible.builtin.assert:
+        that:
+          - (_caddy_tailscale_ip_cmd.stdout_lines | map('trim') | reject('equalto', '') | list | length) > 0
+        fail_msg: >-
+          Could not determine a Tailscale IPv4 address from '{{ caddy_host }}' via
+          `tailscale ip -4`.
+      run_once: true
+
+    - name: Build managed Caddy hosts entry
+      ansible.builtin.set_fact:
+        _caddy_tailnet_ip: >-
+          {{ (_caddy_tailscale_ip_cmd.stdout_lines | map('trim') | reject('equalto', '') | list | first) }}
+        _caddy_hosts_entry_names: >-
+          {{
+            ([caddy_host, (hostvars[caddy_host].ansible_host | default(''))] + caddy_hosts_extra_names)
+            | map('string')
+            | map('trim')
+            | reject('equalto', '')
+            | unique
+            | list
+          }}
+      run_once: true
+      delegate_to: localhost
+      delegate_facts: true
+
+    - name: Ensure /etc/hosts has Caddy tailnet entry
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: >-
+          ^\S+\s+.*\b({{
+            hostvars['localhost']._caddy_hosts_entry_names
+            | map('regex_escape')
+            | join('|')
+          }})\b.*$
+        line: >-
+          {{ hostvars['localhost']._caddy_tailnet_ip }}
+          {{ hostvars['localhost']._caddy_hosts_entry_names | join(' ') }}
+        state: present
+        create: false
+        backup: true

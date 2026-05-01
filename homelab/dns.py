@@ -13,14 +13,20 @@ from typing import Any
 
 import pandas as pd
 
+from .cli_common import bootstrap_config_and_logging
 from .config import (
     DEFAULT_SHEET_URL,
     get_config_value,
     get_effective_table,
     load_toml_or_exit,
-    pre_parse_config,
     render_jinja_template,
     resolve_path_relative_to_config,
+)
+from .fqdn_utils import (
+    ALLOWED_EXPOSURES_DNS,
+    determine_zone,
+    normalize_exposure,
+    split_fqdn_list,
 )
 from .resolver import build_resolver
 from .sheets import (
@@ -30,36 +36,13 @@ from .sheets import (
     get_sheet_df,
     parse_bool,
 )
-from .ssh import (
-    require_command,
-    scp_base_args,
-    ssh_base_args,
-    ssh_control_path,
-    ssh_run,
-    ssh_start_master,
-    ssh_stop_master,
-)
+from .ssh import deploy_file_over_ssh, require_command
 
 logger = logging.getLogger(__name__)
-
-_ALLOWED_EXPOSURES = {"public", "private", "local"}
 
 
 def _normalize_name(value: Any) -> str:
     return as_str(value).lower().rstrip(".")
-
-
-def _normalize_exposure_strict(value: Any, *, row_hint: str) -> str:
-    exposure = as_str(value).lower().strip().replace("_", "-")
-    if not exposure:
-        raise RuntimeError(
-            f"Services row {row_hint}: exposure is required and must be one of public/private/local"
-        )
-    if exposure not in _ALLOWED_EXPOSURES:
-        raise RuntimeError(
-            f"Services row {row_hint}: unsupported exposure {exposure!r}; use only public/private/local"
-        )
-    return exposure
 
 
 def _sheet_row_hint(index: object) -> str:
@@ -72,14 +55,6 @@ def _sheet_row_hint(index: object) -> str:
 # ---------------------------
 # Public DNS (Cloudflare)
 # ---------------------------
-
-
-def _determine_zone(hostname: str, zones: list[str]) -> str | None:
-    target = _normalize_name(hostname)
-    matches = [zone for zone in zones if target == zone or target.endswith(f".{zone}")]
-    if not matches:
-        return None
-    return max(matches, key=len)
 
 
 def _to_record_name(*, fqdn: str, zone: str) -> str:
@@ -148,7 +123,11 @@ def _collect_public_records(*, services_df: pd.DataFrame, zones: list[str], debu
 
     for idx, row in services_df.iterrows():
         row_hint = _sheet_row_hint(idx)
-        exposure = _normalize_exposure_strict(row.get("exposure"), row_hint=row_hint)
+        exposure = normalize_exposure(
+            row.get("exposure"),
+            strict_set=ALLOWED_EXPOSURES_DNS,
+            row_hint=row_hint,
+        )
         if exposure != "public":
             continue
 
@@ -167,7 +146,7 @@ def _collect_public_records(*, services_df: pd.DataFrame, zones: list[str], debu
                 print(f"[dns debug] row {idx}: missing frontend_hostname; skipping", file=sys.stderr)
             continue
 
-        zone = _determine_zone(fqdn, zones)
+        zone = determine_zone(fqdn, zones)
         if not zone:
             raise RuntimeError(
                 f"service row {row_hint} hostname {fqdn!r} does not match any configured dns zone"
@@ -282,18 +261,6 @@ def _first_hostname_label(value: object) -> str:
     return as_str(value).lower().strip().rstrip(".").split(".")[0]
 
 
-def _split_fqdn_list(value: object) -> list[str]:
-    raw = as_str(value)
-    if not raw:
-        return []
-    values: list[str] = []
-    for item in raw.split(";"):
-        fqdn = item.strip().split(":", 1)[0].lower().rstrip(".")
-        if fqdn:
-            values.append(fqdn)
-    return values
-
-
 def _render_internal_config(
     *,
     sheet_url: str,
@@ -341,6 +308,36 @@ def _render_internal_config(
         scope = trace_key or "all"
         print(f"[dns trace:{scope}] {message}", file=sys.stderr)
 
+    public_aliases: set[str] = set()
+    for service_idx, row in services_df.iterrows():
+        row_hint = _sheet_row_hint(service_idx)
+        exposure = normalize_exposure(
+            row.get("exposure"),
+            strict_set=ALLOWED_EXPOSURES_DNS,
+            row_hint=row_hint,
+        )
+        if exposure != "public":
+            continue
+
+        ingress = as_str(row.get("ingress")).lower()
+        if ingress not in {"caddy", "direct"}:
+            continue
+
+        frontend_hostname = as_str(row.get("frontend_hostname")).lower().rstrip(".")
+        if not frontend_hostname:
+            continue
+
+        extra_cnames = [fqdn for fqdn, _ in split_fqdn_list(row.get("extra_cnames"))]
+        for public_alias in dict.fromkeys([frontend_hostname, *extra_cnames]):
+            if not public_alias:
+                continue
+            public_aliases.add(public_alias)
+            _trace(
+                f"Services row {row_hint}: reserving {public_alias} for public DNS; internal DNS will skip it",
+                public_alias,
+                frontend_hostname,
+            )
+
     a_records: list[str] = []
     nodes_cname_by_alias: dict[str, list[tuple[str, str]]] = defaultdict(list)
 
@@ -352,31 +349,72 @@ def _render_internal_config(
 
         host_for_a = dns_name or hostname
         if ip and host_for_a:
-            a_records.append(f"{ip} {host_for_a}")
-            _trace(f"Nodes row {row_hint}: add A record {ip} {host_for_a}", hostname, dns_name, host_for_a)
+            if host_for_a in public_aliases:
+                _trace(
+                    f"Nodes row {row_hint}: skipping A record {ip} {host_for_a} because public DNS owns that name",
+                    hostname,
+                    dns_name,
+                    host_for_a,
+                )
+            else:
+                a_records.append(f"{ip} {host_for_a}")
+                _trace(
+                    f"Nodes row {row_hint}: add A record {ip} {host_for_a}",
+                    hostname,
+                    dns_name,
+                    host_for_a,
+                )
 
         disable_cname = parse_bool(row.get("disable_cname"), default=False)
-        if disable_cname:
-            continue
-
-        search_domain = as_str(
-            row.get("search_domain", row.get("searchdomain", row.get("domain", "")))
-        ).lower().strip().rstrip(".")
-        if not hostname or not search_domain:
-            continue
-
-        cname = f"{hostname}.{search_domain}".rstrip(".")
         target = (dns_name or hostname).rstrip(".")
-        if not cname or not target or cname == target:
+        if not target:
             continue
 
-        nodes_cname_by_alias[cname].append((target, f"nodes row={row_hint}"))
+        if not disable_cname:
+            search_domain = as_str(
+                row.get("search_domain", row.get("searchdomain", row.get("domain", "")))
+            ).lower().strip().rstrip(".")
+            cname = f"{hostname}.{search_domain}".rstrip(".")
+            if cname and hostname and search_domain and cname != target:
+                if cname in public_aliases:
+                    _trace(
+                        f"Nodes row {row_hint}: skipping CNAME {cname} -> {target} because public DNS owns that name",
+                        cname,
+                        target,
+                        hostname,
+                        dns_name,
+                    )
+                else:
+                    nodes_cname_by_alias[cname].append((target, f"nodes row={row_hint}"))
+                    _trace(
+                        f"Nodes row {row_hint}: candidate CNAME {cname} -> {target}",
+                        cname,
+                        target,
+                        hostname,
+                        dns_name,
+                    )
 
-        extra_cnames = _split_fqdn_list(row.get("extra_cnames"))
+        extra_cnames = [fqdn for fqdn, _ in split_fqdn_list(row.get("extra_cnames"))]
         for extra_cname in extra_cnames:
             if not extra_cname or extra_cname == target:
                 continue
+            if extra_cname in public_aliases:
+                _trace(
+                    f"Nodes row {row_hint}: skipping CNAME {extra_cname} -> {target} because public DNS owns that name",
+                    extra_cname,
+                    target,
+                    hostname,
+                    dns_name,
+                )
+                continue
             nodes_cname_by_alias[extra_cname].append((target, f"nodes extra_cnames row={row_hint}"))
+            _trace(
+                f"Nodes row {row_hint}: candidate CNAME {extra_cname} -> {target} (from extra_cnames)",
+                extra_cname,
+                target,
+                hostname,
+                dns_name,
+            )
 
     caddy_target = as_str(caddy_host).lower().strip().rstrip(".")
     tailnet_domain = as_str(tailnet_domain).lower().strip().rstrip(".")
@@ -389,12 +427,16 @@ def _render_internal_config(
         if not frontend_hostname:
             continue
 
-        exposure = _normalize_exposure_strict(row.get("exposure"), row_hint=row_hint)
+        exposure = normalize_exposure(
+            row.get("exposure"),
+            strict_set=ALLOWED_EXPOSURES_DNS,
+            row_hint=row_hint,
+        )
         if exposure not in exposures:
             continue
 
         default_cname_target = parse_bool(row.get("default_cname_target"), default=False)
-        extra_cnames = _split_fqdn_list(row.get("extra_cnames"))
+        extra_cnames = [fqdn for fqdn, _ in split_fqdn_list(row.get("extra_cnames"))]
 
         alias = frontend_hostname
         target = ""
@@ -439,6 +481,17 @@ def _render_internal_config(
 
         service_aliases = [alias, *extra_cnames]
         for service_alias in dict.fromkeys(service_aliases):
+            if service_alias in public_aliases:
+                _trace(
+                    (
+                        f"Services row {row_hint}: skipping internal CNAME {service_alias} -> {target} "
+                        "because public DNS owns that name"
+                    ),
+                    service_alias,
+                    frontend_hostname,
+                    target,
+                )
+                continue
             service_cname_candidates[service_alias].append((target, ingress, default_cname_target, row_hint))
             _trace(
                 (
@@ -559,33 +612,32 @@ def _render_internal_config(
 
 
 def _apply_to_pihole(*, local_path: Path, username: str, host: str, use_sudo: bool) -> None:
-    require_command("scp")
-    require_command("ssh")
-
     remote_final_path = "/etc/pihole/pihole.toml"
-    target = f"{username}@{host}"
-
-    control_path = ssh_control_path(prefix="dns-pihole", username=username, host=host)
-    ssh_args = ssh_base_args(control_path=control_path, port=22, identity_file=None)
-    scp_args_list = scp_base_args(control_path=control_path, port=22, identity_file=None)
-
-    ssh_start_master(ssh_args=ssh_args, target=target, env=None)
-    try:
-        if use_sudo:
-            remote_tmp_path = "/tmp/pihole.toml"
-            subprocess.run([*scp_args_list, str(local_path), f"{target}:{remote_tmp_path}"], check=True)
-            ssh_run(
-                ssh_args=ssh_args,
-                target=target,
-                command=f"sudo install -m 0644 {remote_tmp_path} {remote_final_path}",
-                env=None,
-            )
-            ssh_run(ssh_args=ssh_args, target=target, command="sudo pihole reloaddns", env=None)
-        else:
-            subprocess.run([*scp_args_list, str(local_path), f"{target}:{remote_final_path}"], check=True)
-            ssh_run(ssh_args=ssh_args, target=target, command="pihole reloaddns", env=None)
-    finally:
-        ssh_stop_master(ssh_args=ssh_args, target=target, env=None)
+    if use_sudo:
+        remote_tmp_path = "/tmp/pihole.toml"
+        deploy_file_over_ssh(
+            local_path=local_path,
+            remote_path=remote_final_path,
+            host=host,
+            username=username,
+            port=22,
+            control_prefix="dns-pihole",
+            pre_copy_remote_path=remote_tmp_path,
+            post_copy_command=(
+                f"sudo install -m 0644 {remote_tmp_path} {remote_final_path} "
+                "&& sudo pihole reloaddns"
+            ),
+        )
+    else:
+        deploy_file_over_ssh(
+            local_path=local_path,
+            remote_path=remote_final_path,
+            host=host,
+            username=username,
+            port=22,
+            control_prefix="dns-pihole",
+            post_copy_command="pihole reloaddns",
+        )
 
 
 # ---------------------------
@@ -593,13 +645,12 @@ def _apply_to_pihole(*, local_path: Path, username: str, host: str, use_sudo: bo
 # ---------------------------
 
 
-def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
+def build_parser(*, config_path: Path, config: dict[str, Any]) -> argparse.ArgumentParser:
     repo_root = Path(__file__).resolve().parents[1]
     default_pihole_template = repo_root / "templates" / "pihole" / "pihole.toml.j2"
     default_pihole_output = repo_root / "generated" / "pihole" / "pihole.toml"
     default_dns_output_dir = repo_root / "generated" / "dnscontrol"
 
-    config_path, config = pre_parse_config(argv)
     globals_cfg = get_effective_table(config, "globals", legacy_root_fallback=True)
     dns_cfg = get_effective_table(config, "dns", legacy_root_fallback=False)
     dnscontrol_cfg = get_effective_table(config, "dnscontrol", legacy_root_fallback=False)
@@ -775,6 +826,15 @@ def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
     parser.add_argument("--_apply", dest="apply", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--_keep",
+        dest="keep",
+        action="store_true",
+        default=bool(get_config_value(effective_dnscontrol_cfg, "keep", False))
+        or bool(get_config_value(effective_pihole_cfg, "keep", False))
+        or bool(get_config_value(globals_cfg, "keep", False)),
+        help=argparse.SUPPRESS,
+    )
 
     return parser
 
@@ -806,12 +866,19 @@ def _resolve_cloudflare_credentials(args: argparse.Namespace) -> tuple[str, str]
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser(argv)
+    bootstrapped_config_path, config, _, _ = bootstrap_config_and_logging(argv, "dns")
+
+    parser = build_parser(config_path=bootstrapped_config_path, config=config)
     args = parser.parse_args(argv)
 
     targets = _expand_targets(list(args.target or ["all"]))
 
     config_path = args.config.expanduser().resolve()
+    if config_path != bootstrapped_config_path:
+        config = load_toml_or_exit(config_path)
+
+    globals_cfg = get_effective_table(config, "globals", legacy_root_fallback=True)
+
     dnsconfig_output = resolve_path_relative_to_config(config_path, args.dnsconfig_output)
     creds_output = resolve_path_relative_to_config(config_path, args.creds_output)
     template_path = resolve_path_relative_to_config(config_path, args.template)
@@ -831,7 +898,11 @@ def main(argv: list[str] | None = None) -> int:
     for idx, row in services_df.iterrows():
         row_hint = _sheet_row_hint(idx)
         try:
-            _normalize_exposure_strict(row.get("exposure"), row_hint=row_hint)
+            normalize_exposure(
+                row.get("exposure"),
+                strict_set=ALLOWED_EXPOSURES_DNS,
+                row_hint=row_hint,
+            )
         except Exception as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
@@ -950,9 +1021,6 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
         try:
-            config = load_toml_or_exit(config_path)
-            globals_cfg = get_effective_table(config, "globals", legacy_root_fallback=True)
-
             caddy_host = str(get_config_value(globals_cfg, "caddy_host", "")).strip()
             if not caddy_host:
                 caddy_host = str(get_config_value(globals_cfg, "caddy_hostname", "")).strip()

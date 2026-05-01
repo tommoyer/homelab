@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import curses
-import ipaddress
 import logging
 import shlex
 import subprocess
@@ -23,7 +22,13 @@ from .config import (
     resolve_path_relative_to_config,
 )
 from .resolver import build_resolver
-from .sheets import as_str, df_with_normalized_columns, get_sheet_df, parse_bool
+from .sheets import (
+    as_str,
+    df_with_normalized_columns,
+    get_sheet_df,
+    normalize_ip,
+    parse_bool,
+)
 from .ssh import prefix_sshpass, require_command, sshpass_env_from_password_env
 from .tailscale import get_tailscale_lookup_safe, is_on_tailnet
 
@@ -109,22 +114,13 @@ def _as_int(value: Any, default: int) -> int:
         return default
 
 
-def _extract_ip(value: str) -> str | None:
-    raw = as_str(value)
-    if not raw:
-        return None
-    first = raw.split()[0].strip()
-    if "/" in first:
-        first = first.split("/", 1)[0].strip()
-    try:
-        ipaddress.ip_address(first)
-    except ValueError:
-        return None
-    return first
-
-
-def build_parser(argv: list[str] | None = None) -> argparse.ArgumentParser:
-    config_path, config, globals_cfg, tool_cfg = bootstrap_config_and_logging(argv, "tailscale_install")
+def build_parser(
+    *,
+    config_path: Path,
+    config: dict[str, Any],
+    globals_cfg: dict[str, Any],
+    tool_cfg: dict[str, Any],
+) -> argparse.ArgumentParser:
     deploy_cfg = get_effective_table(config, "deploy", inherit=("globals",), legacy_root_fallback=False)
 
     parser = build_base_parser(
@@ -269,7 +265,7 @@ def _build_ssh_env_and_auth(*, apply: bool, password_env: str) -> tuple[dict[str
 
 
 def _node_ssh_host(row: Any, *, resolver: Any) -> str:
-    ip_value = _extract_ip(as_str(row.get("ip_address")))
+    ip_value = normalize_ip(as_str(row.get("ip_address")))
     if ip_value:
         return ip_value
 
@@ -389,12 +385,24 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
 
     if isinstance(argv, argparse.Namespace):
         args = argv
+        config_path = args.config.expanduser().resolve()
+        config = load_toml_or_exit(config_path)
     else:
-        parser = build_parser(argv)
+        bootstrapped_config_path, config, globals_cfg, tool_cfg = bootstrap_config_and_logging(
+            argv,
+            "tailscale_install",
+        )
+        parser = build_parser(
+            config_path=bootstrapped_config_path,
+            config=config,
+            globals_cfg=globals_cfg,
+            tool_cfg=tool_cfg,
+        )
         args = parser.parse_args(argv)
+        config_path = args.config.expanduser().resolve()
+        if config_path != bootstrapped_config_path:
+            config = load_toml_or_exit(config_path)
 
-    config_path = args.config.expanduser().resolve()
-    config = load_toml_or_exit(config_path)
     settings = get_effective_table(config, "tailscale_install", inherit=("globals",), legacy_root_fallback=False)
 
     sheet_url = as_str(args.sheet_url or settings.get("sheet_url"))

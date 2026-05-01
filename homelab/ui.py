@@ -5,6 +5,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .cli_common import SENTINEL_APPLY, SENTINEL_DEBUG, SENTINEL_KEEP
 from .commands import COMMANDS
 from .sheets import clear_sheet_df_cache
 
@@ -14,6 +15,7 @@ class GlobalFlags:
     """Global flags that apply to all commands."""
     debug: bool = False
     apply: bool = False
+    keep: bool = False
 
 
 @dataclass(frozen=True)
@@ -140,8 +142,8 @@ def _main_menu(
     """Display main command selection menu with global flags."""
     curses.curs_set(0)
     
-    # 0 = debug flag, 1 = apply flag, 2+ = commands
-    num_global_items = 2
+    # 0 = debug flag, 1 = apply flag, 2 = keep flag, 3+ = commands
+    num_global_items = 3
     selected = num_global_items  # Start on first command by default
 
     while True:
@@ -174,6 +176,16 @@ def _main_menu(
         )
         stdscr.addstr(y, 0, apply_label)
         y += 1
+
+        # Keep flag
+        prefix = "▶" if selected == 2 else " "
+        keep_toggle = "[×]" if global_flags.keep else "[ ]"
+        keep_label = (
+            f"{prefix} {keep_toggle} --keep          "
+            "Keep downloaded Sheets CSVs for debugging"
+        )
+        stdscr.addstr(y, 0, keep_label)
+        y += 1
         
         stdscr.addstr(y, 0, "─" * min(width - 1, 80))
         y += 1
@@ -201,6 +213,8 @@ def _main_menu(
                 global_flags.debug = not global_flags.debug
             elif selected == 1:  # Apply flag
                 global_flags.apply = not global_flags.apply
+            elif selected == 2:  # Keep flag
+                global_flags.keep = not global_flags.keep
         elif ch in (10, 13, curses.KEY_ENTER):  # Enter
             if selected >= num_global_items:
                 # Selected a command
@@ -355,13 +369,17 @@ def main(argv: list[str] | None = None) -> int:
         command_argv = _build_argv_from_config(config)
         
         # Add global flags if not already present in command-specific flags
-        if global_flags.debug and "--_debug" not in command_argv:
+        if global_flags.debug and SENTINEL_DEBUG not in command_argv:
             if selected_entry.name in {"caddy", "mikrotik", "deploy", "dns", "tailscale_install"}:
-                command_argv.insert(0, "--_debug")
+                command_argv.insert(0, SENTINEL_DEBUG)
         
-        if global_flags.apply and "--_apply" not in command_argv:
+        if global_flags.apply and SENTINEL_APPLY not in command_argv:
             if selected_entry.name in {"deploy", "dns", "caddy", "tailscale_install"}:
-                command_argv.insert(0, "--_apply")
+                command_argv.insert(0, SENTINEL_APPLY)
+
+        if global_flags.keep and SENTINEL_KEEP not in command_argv:
+            if selected_entry.name in {"deploy", "dns", "caddy", "tailscale_install", "mikrotik"}:
+                command_argv.insert(0, SENTINEL_KEEP)
         
         print(f"\n{'═' * 60}")
         print(f"Running: {selected_entry.name} {' '.join(command_argv)}")

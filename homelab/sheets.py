@@ -1,14 +1,42 @@
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import re
+import tempfile
 import threading
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 _SHEET_DF_CACHE: dict[tuple[str, int], pd.DataFrame] = {}
 _SHEET_DF_CACHE_LOCK = threading.Lock()
+
+_KEEP_DOWNLOADED_CSV = False
+_KEEP_DOWNLOADED_CSV_DIR = Path(tempfile.gettempdir()) / "homelab-sheets"
+
+
+def configure_sheet_csv_retention(*, keep: bool, output_dir: str | Path | None = None) -> None:
+    global _KEEP_DOWNLOADED_CSV
+    global _KEEP_DOWNLOADED_CSV_DIR
+
+    _KEEP_DOWNLOADED_CSV = bool(keep)
+    if output_dir is not None:
+        _KEEP_DOWNLOADED_CSV_DIR = Path(output_dir)
+
+
+def _maybe_write_downloaded_csv(*, csv_text: str, label: str, gid: int, url: str) -> None:
+    if not _KEEP_DOWNLOADED_CSV:
+        return
+
+    _KEEP_DOWNLOADED_CSV_DIR.mkdir(parents=True, exist_ok=True)
+    safe_label = normalize_column_name(label) or "sheet"
+    url_hash = hashlib.sha1(url.encode("utf-8")).hexdigest()[:10]
+    output_path = _KEEP_DOWNLOADED_CSV_DIR / f"{safe_label}-gid{int(gid)}-{url_hash}.csv"
+    output_path.write_text(csv_text, encoding="utf-8")
+    print(f"Saved {label} CSV to {output_path}", flush=True)
+
 
 def get_sheet_df(sheet_url: str, gid: int, timeout_seconds: float, label: str) -> pd.DataFrame:
     """Load a Google Sheet tab as a DataFrame, caching by (sheet_url, gid)."""
@@ -24,14 +52,18 @@ def get_sheet_df(sheet_url: str, gid: int, timeout_seconds: float, label: str) -
     print(f"Loading {label} sheet data...", flush=True)
     response = requests.get(url, timeout=timeout_seconds)
     response.raise_for_status()
-    df = df_with_normalized_columns(pd.read_csv(io.StringIO(response.text)))
+    csv_text = response.text
+    _maybe_write_downloaded_csv(csv_text=csv_text, label=label, gid=int(gid), url=url)
+    df = df_with_normalized_columns(pd.read_csv(io.StringIO(csv_text)))
     with _SHEET_DF_CACHE_LOCK:
         _SHEET_DF_CACHE[key] = df
     return df
 
+
 def clear_sheet_df_cache():
     with _SHEET_DF_CACHE_LOCK:
         _SHEET_DF_CACHE.clear()
+
 
 def build_sheet_url(sheet_url: str, gid: int) -> str:
     if "gid=0" not in sheet_url:
@@ -64,6 +96,41 @@ def as_str(value: Any) -> str:
     if is_blank(value):
         return ""
     return str(value).strip()
+
+
+def normalize_int_cell(value: object) -> str:
+    """Normalize values that should be integers but may arrive as floats/strings.
+
+    Examples:
+      - 20.0 -> "20"
+      - "20.0" -> "20"
+      - " 20 " -> "20"
+    """
+
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return str(value).strip()
+
+    cleaned = str(value).strip()
+    if not cleaned:
+        return ""
+    m = re.match(r"^(\d+)\.0+$", cleaned)
+    if m:
+        return m.group(1)
+    return cleaned
 
 
 def parse_bool(value: Any, default: bool = False) -> bool:
@@ -112,9 +179,10 @@ def normalize_ports(value: Any) -> list[int]:
 
 
 def normalize_ip(address: str) -> str | None:
-    address = (address or "").strip()
-    if not address:
+    tokens = (address or "").strip().split()
+    if not tokens:
         return None
+    address = tokens[0]
     try:
         return str(ipaddress.ip_interface(address).ip)
     except ValueError:
