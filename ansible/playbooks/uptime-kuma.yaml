@@ -1,0 +1,146 @@
+---
+# Deploy a Docker Compose service to hosts with the "docker" role.
+#
+# For each targeted host this playbook expects:
+#   templates/<hostname>-docker-compose.yaml   (required, Jinja2)
+#   templates/<hostname>.env.j2                (optional, Jinja2 – skipped if absent)
+#
+# Usage:
+#   ansible-playbook playbooks/docker-compose.yaml
+#   ansible-playbook playbooks/docker-compose.yaml --limit myhost
+#   ansible-playbook playbooks/docker-compose.yaml -e service_name=myapp
+#
+# Variables:
+#   service_name        Name of the service directory under compose_base_dir.
+#                       Defaults to inventory_hostname.
+#   compose_base_dir    Parent directory for all services. Default: /home/ansible
+#
+- name: Deploy Docker Compose service
+  hosts: "{{ target_hosts | default('uptime-kuma') }}"
+  gather_facts: yes
+  become: yes
+
+  vars:
+    service_name: "{{ inventory_hostname }}"
+    compose_base_dir: /home/ansible
+    compose_deploy_dir: "{{ compose_base_dir }}/{{ service_name }}"
+    _compose_file_src: "{{ playbook_dir }}/../files/uptime-kuma/docker-compose.yaml"
+    _env_template: "{{ playbook_dir }}/../templates/{{ inventory_hostname }}.env.j2"
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # Install Docker from official Docker repositories
+    # -------------------------------------------------------------------------
+    - name: Install prerequisite packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: Ensure /etc/apt/keyrings directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Download Docker GPG key
+      ansible.builtin.get_url:
+        url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Get dpkg architecture
+      ansible.builtin.command: dpkg --print-architecture
+      register: _dpkg_arch
+      changed_when: false
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ _dpkg_arch.stdout }} signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/{{ ansible_distribution | lower }}
+          {{ ansible_distribution_release }} stable
+        state: present
+        filename: docker
+
+    - name: Install Docker packages
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+
+    - name: Add ansible user to docker group
+      ansible.builtin.user:
+        name: ansible
+        groups: docker
+        append: yes
+
+    # -------------------------------------------------------------------------
+    # Pre-flight checks (run on controller, not on the remote host)
+    # -------------------------------------------------------------------------
+    - name: Check whether .env template exists on controller
+      ansible.builtin.stat:
+        path: "{{ _env_template }}"
+      delegate_to: localhost
+      become: false
+      register: _env_template_stat
+
+    # -------------------------------------------------------------------------
+    # Directory layout
+    # -------------------------------------------------------------------------
+    - name: Ensure service directory exists
+      ansible.builtin.file:
+        path: "{{ compose_deploy_dir }}"
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0750"
+
+    # -------------------------------------------------------------------------
+    # Deploy compose file and optional .env
+    # -------------------------------------------------------------------------
+    - name: Deploy docker-compose.yaml
+      ansible.builtin.copy:
+        src: "{{ _compose_file_src }}"
+        dest: "{{ compose_deploy_dir }}/docker-compose.yaml"
+        owner: ansible
+        group: ansible
+        mode: "0640"
+      register: _compose_deployed
+
+    - name: Deploy .env file
+      ansible.builtin.template:
+        src: "{{ _env_template }}"
+        dest: "{{ compose_deploy_dir }}/.env"
+        owner: ansible
+        group: ansible
+        mode: "0600"
+      when: _env_template_stat.stat.exists
+      register: _env_file
+
+    # -------------------------------------------------------------------------
+    # Pull images and (re)start services
+    # -------------------------------------------------------------------------
+    - name: Pull Docker images
+      ansible.builtin.command:
+        cmd: docker compose pull
+        chdir: "{{ compose_deploy_dir }}"
+      register: _compose_pull
+      changed_when: "'Pulled' in _compose_pull.stdout"
+
+    - name: Start services (docker compose up -d)
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ compose_deploy_dir }}"
+      register: _compose_up
+      changed_when: >-
+        'Started' in _compose_up.stdout or
+        'Created' in _compose_up.stdout or
+        'Recreated' in _compose_up.stdout

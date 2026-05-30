@@ -132,6 +132,8 @@ def build_inventory(cfg: dict[str, Any], *, use_tailscale: bool = True) -> dict[
     proxmox_vmid_col = normalize_column_name(str(cfg.get("proxmox_vmid_col", "VMID")))
     proxmox_type_col = normalize_column_name(str(cfg.get("proxmox_type_col", "Proxmox Type")))
 
+    accept_ts_routes_col = normalize_column_name(str(cfg.get("accept_ts_routes_col", "Accept TS Routes")))
+
     required_cols = [managed_col, hostname_col, ip_col]
     missing = [col for col in required_cols if col not in set(df.columns)]
     if missing:
@@ -175,6 +177,11 @@ def build_inventory(cfg: dict[str, Any], *, use_tailscale: bool = True) -> dict[
                         continue
                     host_groups.add(group)
                     groups.setdefault(group, set()).add(hostname)
+
+        # Hosts that do not accept Tailscale routes
+        if accept_ts_routes_col in set(df.columns):
+            if not parse_bool(row_dict.get(accept_ts_routes_col), default=True):
+                groups.setdefault("ts_skip_route_accept", set()).add(hostname)
 
         # Proxmox DNS hostvars (only for hosts in the proxmox_dns group)
         if "proxmox_dns" in host_groups:

@@ -1,0 +1,24 @@
+---
+- name: Configure Tailscale settings
+  hosts: ts_skip_route_accept
+  become: true
+  tasks:
+    - name: Get Tailscale status
+      command: tailscale status --json
+      register: ts_status_result
+      changed_when: false
+      failed_when: false
+
+    - name: Verify Tailscale is connected
+      assert:
+        that:
+          - ts_status_result.rc == 0
+          - (ts_status_result.stdout | from_json).BackendState == 'Running'
+        fail_msg: >-
+          Tailscale is not connected on {{ inventory_hostname }}
+          (BackendState: {{ (ts_status_result.stdout | from_json).BackendState
+          if ts_status_result.rc == 0 else 'command failed' }})
+
+    - name: Configure Tailscale settings
+      command: tailscale set --operator=tmoyer --accept-dns=false --accept-routes=false
+      changed_when: true
