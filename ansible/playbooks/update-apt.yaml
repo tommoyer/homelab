@@ -1,0 +1,33 @@
+---
+# Update all packages via apt on Ansible-managed Debian/Ubuntu hosts.
+#
+# Usage:
+#   ansible-playbook playbooks/update-apt.yaml --limit <hostname>
+#   ansible-playbook playbooks/update-apt.yaml -e target_hosts=myhosts
+#
+- name: Update packages via apt
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: yes
+  become: yes
+
+  tasks:
+    - name: Update apt package cache
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 0
+
+    - name: Upgrade all packages (dist-upgrade)
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: _reboot_required
+
+    - name: Report reboot requirement
+      ansible.builtin.debug:
+        msg: "Reboot required on {{ inventory_hostname }} — run 'reboot' manually when ready"
+      when: _reboot_required.stat.exists

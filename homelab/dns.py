@@ -476,12 +476,30 @@ def _render_internal_config(
                         f"Services row {row_hint}: local direct service requires a hostname target"
                     )
                 target = direct_target
+
+        elif exposure == "public":
+            if ingress == "caddy":
+                if not caddy_target:
+                    raise RuntimeError(
+                        f"Services row {row_hint}: public caddy service requires caddy host"
+                    )
+                target = caddy_target
+            elif ingress == "direct":
+                direct_target = as_str(row.get("hostname")).lower().rstrip(".")
+                if not direct_target:
+                    raise RuntimeError(
+                        f"Services row {row_hint}: public direct service requires a hostname target"
+                    )
+                target = direct_target
+            else:
+                continue
+
         else:
             continue
 
         service_aliases = [alias, *extra_cnames]
         for service_alias in dict.fromkeys(service_aliases):
-            if service_alias in public_aliases:
+            if service_alias in public_aliases and exposure != "public":
                 _trace(
                     (
                         f"Services row {row_hint}: skipping internal CNAME {service_alias} -> {target} "
@@ -908,6 +926,10 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     generated_any = False
+    generated_public = False
+    generated_internal = False
+    cloudflare_api_token = ""
+    cloudflare_account_id = ""
 
     if "public" in targets:
         public_ip = as_str(args.public_ip)
@@ -974,42 +996,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Generated {creds_output}")
         print(f"Generated {len(records)} public record(s) across {len(zones)} zone(s)")
         generated_any = True
-
-        if args.apply:
-            if not cloudflare_api_token:
-                print(
-                    "Error: public apply requires Cloudflare API token (env or --cloudflare-api-token)",
-                    file=sys.stderr,
-                )
-                return 2
-            try:
-                require_command(str(args.dnscontrol_command))
-                cmd = [
-                    str(args.dnscontrol_command),
-                    "push",
-                    "--config",
-                    str(dnsconfig_output),
-                    "--creds",
-                    str(creds_output),
-                ]
-                result = subprocess.run(cmd, check=True, text=True, capture_output=True)
-                if result.stdout:
-                    print(result.stdout.strip())
-                if result.stderr:
-                    print(result.stderr.strip(), file=sys.stderr)
-                print("Applied public DNS changes with dnscontrol push")
-            except subprocess.CalledProcessError as exc:
-                if exc.stdout:
-                    print(exc.stdout.strip())
-                if exc.stderr:
-                    print(exc.stderr.strip(), file=sys.stderr)
-                print(f"Error: dnscontrol push failed (exit code {exc.returncode})", file=sys.stderr)
-                return 1
-            except Exception as exc:
-                print(f"Error: public apply failed: {exc}", file=sys.stderr)
-                return 1
-        else:
-            print("Dry run (public apply disabled): no Cloudflare provider changes made")
+        generated_public = True
 
     internal_exposures = targets & {"private", "local"}
     if internal_exposures:
@@ -1032,7 +1019,7 @@ def main(argv: list[str] | None = None) -> int:
                 template_path=template_path,
                 caddy_host=caddy_host,
                 tailnet_domain=str(getattr(args, "tailnet", "") or "").strip(),
-                exposures=internal_exposures,
+                exposures=internal_exposures | {"public"},
                 trace_hostname=(str(args.trace_hostname) if args.trace_hostname else None),
                 debug=bool(args.debug),
             )
@@ -1044,33 +1031,84 @@ def main(argv: list[str] | None = None) -> int:
         output_path.write_text(rendered, encoding="utf-8")
         print(f"Rendered {output_path} from template {template_path}")
         generated_any = True
-
-        if args.apply:
-            if not args.pihole_user or not args.pihole_host:
-                print(
-                    "Error: internal apply requires --pihole-user and --pihole-host (or [dns]/[pihole] config)",
-                    file=sys.stderr,
-                )
-                return 2
-            try:
-                resolver = build_resolver(config)
-                resolved_pihole_host = resolver.resolve(str(args.pihole_host))
-                _apply_to_pihole(
-                    local_path=output_path,
-                    username=str(args.pihole_user),
-                    host=str(resolved_pihole_host),
-                    use_sudo=bool(args.use_sudo),
-                )
-            except Exception as exc:
-                print(f"Error: failed applying internal DNS to Pi-hole: {exc}", file=sys.stderr)
-                return 1
-            print("Applied internal DNS config to Pi-hole and reloaded DNS")
-        else:
-            print("Dry run (internal apply disabled): no Pi-hole remote changes made")
+        generated_internal = True
 
     if not generated_any:
         print("Nothing to do: no targets selected", file=sys.stderr)
         return 2
+
+    if not args.apply:
+        print("Dry run (apply mode disabled): no remote changes made")
+        if generated_public:
+            print(f"- generated: {dnsconfig_output}")
+            print(f"- generated: {creds_output}")
+            print(
+                f"- would run: {args.dnscontrol_command} push --config {dnsconfig_output} --creds {creds_output}"
+            )
+        if generated_internal:
+            print(f"- generated: {output_path}")
+            if not args.pihole_user or not args.pihole_host:
+                print("- would apply internal: skipped (missing pihole_user and/or pihole_host)")
+            else:
+                print(
+                    f"- would deploy: {output_path} -> {args.pihole_user}@{args.pihole_host}:/etc/pihole/pihole.toml"
+                )
+        return 0
+
+    if generated_public:
+        if not cloudflare_api_token:
+            print(
+                "Error: public apply requires Cloudflare API token (env or --cloudflare-api-token)",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            require_command(str(args.dnscontrol_command))
+            cmd = [
+                str(args.dnscontrol_command),
+                "push",
+                "--config",
+                str(dnsconfig_output),
+                "--creds",
+                str(creds_output),
+            ]
+            result = subprocess.run(cmd, check=True, text=True, capture_output=True)
+            if result.stdout:
+                print(result.stdout.strip())
+            if result.stderr:
+                print(result.stderr.strip(), file=sys.stderr)
+            print("Applied public DNS changes with dnscontrol push")
+        except subprocess.CalledProcessError as exc:
+            if exc.stdout:
+                print(exc.stdout.strip())
+            if exc.stderr:
+                print(exc.stderr.strip(), file=sys.stderr)
+            print(f"Error: dnscontrol push failed (exit code {exc.returncode})", file=sys.stderr)
+            return 1
+        except Exception as exc:
+            print(f"Error: public apply failed: {exc}", file=sys.stderr)
+            return 1
+
+    if generated_internal:
+        if not args.pihole_user or not args.pihole_host:
+            print(
+                "Error: internal apply requires --pihole-user and --pihole-host (or [dns]/[pihole] config)",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            resolver = build_resolver(config)
+            resolved_pihole_host = resolver.resolve(str(args.pihole_host))
+            _apply_to_pihole(
+                local_path=output_path,
+                username=str(args.pihole_user),
+                host=str(resolved_pihole_host),
+                use_sudo=bool(args.use_sudo),
+            )
+        except Exception as exc:
+            print(f"Error: failed applying internal DNS to Pi-hole: {exc}", file=sys.stderr)
+            return 1
+        print("Applied internal DNS config to Pi-hole and reloaded DNS")
 
     return 0
 

@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from . import caddyfile, deploy, dns, mikrotik_prompt, subnet_assign, tailscale_install
+from . import (
+    caddyfile,
+    deploy,
+    dns,
+    mikrotik_prompt,
+    subnet_assign,
+    tailscale_install,
+    update,
+)
 
 # Central registry of homelab CLI commands.
 #
@@ -17,4 +25,5 @@ COMMANDS: dict[str, tuple[str, object]] = {
     "deploy": ("Deploy a complete node/service", deploy),
     "tailscale_install": ("Install Tailscale from Nodes sheet methods", tailscale_install),
     "subnet_assign": ("Interactive subnet/IP assignment tool", subnet_assign),
+    "update": ("Update nodes and services with per-node approval", update),
 }

@@ -1,0 +1,10 @@
+---
+collections:
+  - name: artis3n.tailscale
+  - name: ansible.posix
+  - name: community.docker
+  - name: community.general
+
+roles:
+  - name: andrewrothstein.unarchivedeps
+  - name: andrewrothstein.ollama

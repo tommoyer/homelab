@@ -1,0 +1,6 @@
+@{{ handler_label }} host {{ fqdn }}
+handle @{{ handler_label }} {
+	reverse_proxy {{ backend }} {
+		header_down -Cross-Origin-Opener-Policy
+	}
+}

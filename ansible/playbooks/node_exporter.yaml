@@ -1,0 +1,118 @@
+---
+# Install and configure Prometheus node_exporter as a systemd service.
+#
+# Downloads the official binary from GitHub releases, installs it to
+# /usr/local/bin, creates a dedicated system user, and manages the
+# systemd unit.
+#
+# Usage:
+#   ansible-playbook playbooks/node-exporter.yaml
+#   ansible-playbook playbooks/node-exporter.yaml --limit myhost
+#   ansible-playbook playbooks/node-exporter.yaml -e target_hosts=mygroup
+#   ansible-playbook playbooks/node-exporter.yaml -e node_exporter_version=1.9.1
+#
+- name: Install Prometheus node_exporter
+  hosts: "{{ target_hosts | default('node_exporter') }}"
+  gather_facts: yes
+  become: yes
+
+  vars:
+    node_exporter_version: "1.9.1"
+    node_exporter_user: node_exporter
+    node_exporter_install_dir: /usr/local/bin
+    node_exporter_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+    node_exporter_download_url: >-
+      https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-{{ node_exporter_arch }}.tar.gz
+
+  tasks:
+    - name: Create node_exporter system user
+      ansible.builtin.user:
+        name: "{{ node_exporter_user }}"
+        system: yes
+        shell: /usr/sbin/nologin
+        create_home: no
+        comment: Prometheus node_exporter
+
+    - name: Check currently installed node_exporter version
+      ansible.builtin.command: "{{ node_exporter_install_dir }}/node_exporter --version"
+      register: _installed_version
+      changed_when: false
+      failed_when: false
+
+    - name: Download node_exporter archive
+      ansible.builtin.get_url:
+        url: "{{ node_exporter_download_url }}"
+        dest: /tmp/node_exporter-{{ node_exporter_version }}.tar.gz
+        mode: "0644"
+      when: >-
+        _installed_version.rc != 0 or
+        node_exporter_version not in _installed_version.stdout
+
+    - name: Extract node_exporter binary
+      ansible.builtin.unarchive:
+        src: /tmp/node_exporter-{{ node_exporter_version }}.tar.gz
+        dest: /tmp
+        remote_src: yes
+        creates: /tmp/node_exporter-{{ node_exporter_version }}.linux-{{ node_exporter_arch }}/node_exporter
+      when: >-
+        _installed_version.rc != 0 or
+        node_exporter_version not in _installed_version.stdout
+
+    - name: Install node_exporter binary
+      ansible.builtin.copy:
+        src: /tmp/node_exporter-{{ node_exporter_version }}.linux-{{ node_exporter_arch }}/node_exporter
+        dest: "{{ node_exporter_install_dir }}/node_exporter"
+        owner: root
+        group: root
+        mode: "0755"
+        remote_src: yes
+      notify: Restart node_exporter
+      when: >-
+        _installed_version.rc != 0 or
+        node_exporter_version not in _installed_version.stdout
+
+    - name: Install node_exporter systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/node_exporter.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Prometheus node_exporter
+          After=network.target
+
+          [Service]
+          User={{ node_exporter_user }}
+          Group={{ node_exporter_user }}
+          Type=simple
+          ExecStart={{ node_exporter_install_dir }}/node_exporter
+          Restart=on-failure
+          RestartSec=5s
+          NoNewPrivileges=yes
+          ProtectSystem=strict
+          ProtectHome=yes
+          PrivateTmp=yes
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart node_exporter
+
+    - name: Enable and start node_exporter
+      ansible.builtin.systemd:
+        name: node_exporter
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Clean up downloaded archive
+      ansible.builtin.file:
+        path: /tmp/node_exporter-{{ node_exporter_version }}.tar.gz
+        state: absent
+
+  handlers:
+    - name: Restart node_exporter
+      ansible.builtin.systemd:
+        name: node_exporter
+        state: restarted
+        daemon_reload: yes

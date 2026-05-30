@@ -12,8 +12,8 @@ python -m homelab mikrotik
 
 - Uses a curses-based form UI to edit one service at a time.
 - Prefills fields from `config.toml` and Google Sheets service/node data when available.
-- Shows a curses confirmation screen before generating commands.
-- Generates RouterOS commands only (no direct apply) and writes an `.rsc` artifact.
+- Generates RouterOS commands only (no direct apply) and writes a `full-config.rsc` artifact.
+- Includes static address-list commands from the `Zones` sheet management rows and the `Static Address Lists` sheet when `static_address_lists_gid` is configured.
 
 Non-interactive mode (sheet as source of truth):
 
@@ -22,7 +22,7 @@ python -m homelab mikrotik --no-prompt --service ptero-panel.moyer.wtf
 ```
 
 - `--no-prompt` requires `--service`.
-- In this mode, generation uses Google Sheet values directly (no curses form/confirmation).
+- In this mode, generation uses Google Sheet values directly (no curses form).
 
 - Regular backups for both done using [Oxidized](https://github.com/ytti/oxidized)
 

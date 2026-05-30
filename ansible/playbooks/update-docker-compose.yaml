@@ -1,0 +1,67 @@
+---
+# Pull updated Docker images and restart services for Docker Compose hosts.
+#
+# Unlike docker-compose.yaml, this playbook does NOT re-template configuration
+# files — it only pulls new images and restarts running services. Run
+# docker-compose.yaml first if you need to update the compose file itself.
+#
+# The compose directory is expected at {{ compose_base_dir }}/{{ inventory_hostname }}/
+# (matching the layout created by docker-compose.yaml / services.yaml).
+#
+# Usage:
+#   ansible-playbook playbooks/update-docker-compose.yaml --limit <hostname>
+#   ansible-playbook playbooks/update-docker-compose.yaml -e target_hosts=myhosts
+#
+- name: Update Docker Compose services
+  hosts: "{{ target_hosts | default('services') }}"
+  gather_facts: no
+  become: yes
+
+  vars:
+    service_name: "{{ inventory_hostname }}"
+    compose_base_dir: /home/ansible
+    compose_deploy_dir: "{{ compose_base_dir }}/{{ service_name }}"
+
+  tasks:
+    - name: Ensure gitea.priv.moyer.wtf is present in /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "192.168.20.2 gitea.priv.moyer.wtf"
+        state: present
+        insertbefore: BOF
+
+    - name: Check compose file exists
+      ansible.builtin.stat:
+        path: "{{ compose_deploy_dir }}/docker-compose.yaml"
+      register: _compose_file
+
+    - name: Fail if compose file not found
+      ansible.builtin.fail:
+        msg: >-
+          No docker-compose.yaml found at {{ compose_deploy_dir }}/docker-compose.yaml.
+          Deploy the service first with docker-compose.yaml or services.yaml.
+      when: not _compose_file.stat.exists
+
+    - name: Log in to Gitea container registry
+      ansible.builtin.command:
+        cmd: >-
+          docker login gitea.priv.moyer.wtf
+          --username ansible
+          --password-stdin
+        stdin: "{{ lookup('env', 'GITEA_TOKEN') }}"
+      no_log: true
+      failed_when: false
+
+    - name: Pull updated Docker images
+      ansible.builtin.command:
+        cmd: docker compose pull
+        chdir: "{{ compose_deploy_dir }}"
+      register: _pull_result
+      changed_when: "'Pulled' in _pull_result.stdout or 'pulled' in _pull_result.stdout"
+
+    - name: Restart services with updated images
+      ansible.builtin.command:
+        cmd: docker compose up -d --remove-orphans
+        chdir: "{{ compose_deploy_dir }}"
+      register: _up_result
+      changed_when: true

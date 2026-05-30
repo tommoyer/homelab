@@ -14,6 +14,9 @@ zones_gid = 0
 nodes_gid = 344016240
 services_gid = 157827580
 helpers_gid = 230264716
+static_address_lists_gid = 1404141881
+filter_rules_gid = 1028118588
+nat_rules_gid = 73036663
 # subnets_gid = 0  # Set to the actual GID of your Subnets tab to enable intra-VLAN rule suppression
 
 # DNS hostname of the Caddy server as it appears in the Nodes sheet.
@@ -23,6 +26,12 @@ helpers_gid = 230264716
 #   - mikrotik: resolved to IP via Nodes sheet for firewall rules
 # When set to a hostname (not an IP), tools resolve it from the Nodes sheet.
 caddy_host = "caddy.dmz.moyer.wtf"
+
+# IP address of the Tailscale subnet router.
+# When set, mikrotik generation adds hlb-tailscale-subnet-router address-list
+# entries and forward filter rules allowing the subnet router to reach
+# public caddy-ingress (ports 80/443) and public direct-ingress services.
+tailscale_subnet_router = "192.168.20.4"
 
 # Public WAN IPv4 used for internet-facing DNS records.
 public_ip = "207.144.81.217"
@@ -53,6 +62,24 @@ pve_scripts_base_url = "https://raw.githubusercontent.com/community-scripts/Prox
 #   <frontend_hostname>.<trusted_zone>
 # This trusted/private zone is also consumed by the Caddy generator.
 trusted_zone = "priv.moyer.wtf"
+
+[update]
+# Settings for the `homelab update` command.
+# Inherits sheet_url, nodes_gid, ssh_identity_file, and ssh_port from [globals].
+
+# Command to run inside PVE containers to update their application.
+# Community-scripts containers install a standard `update` script into PATH.
+pve_update_cmd = "update"
+
+# SSH user for connecting to PVE containers during pve-helper updates.
+# Leave empty to auto-detect: "ansible" for managed=true nodes, "root" otherwise.
+# pve_ssh_user = ""
+
+# SSH port override for PVE container connections (defaults to globals.ssh_port).
+# pve_ssh_port = 22
+
+# SSH identity file override for PVE container connections (defaults to globals.ssh_identity_file).
+# pve_ssh_identity_file = ""
 
 [tailscale]
 # Tailscale integration for transparent host resolution.
@@ -175,6 +202,8 @@ mac_column = "MAC Address"
 
 # Public WAN IPs used for strict dst-address matching in generated DNAT rules.
 wan_ips = ["207.144.81.217"]
+
+clients_subnet = "192.168.100.0/24"
 
 # Interface names (match your RouterOS config).
 dmz_interface = "vlan20-dmz"

@@ -280,6 +280,19 @@ def _node_ssh_host(row: Any, *, resolver: Any) -> str:
     return ""
 
 
+def _node_tailnet_names(row: Any) -> list[str]:
+    names = []
+    for value in (row.get("hostname"), row.get("dns_name")):
+        name = as_str(value).strip()
+        if name:
+            names.append(name)
+    return list(dict.fromkeys(names))
+
+
+def _node_is_on_tailnet(row: Any, *, lookup: dict[str, str]) -> bool:
+    return any(is_on_tailnet(node_name=name, lookup=lookup) for name in _node_tailnet_names(row))
+
+
 def _run_direct_tailscale_install(
     *,
     hostname: str,
@@ -449,7 +462,7 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
 
     disconnected_candidates: list[tuple[str, Any]] = []
     for hostname, row in candidates_with_method:
-        if is_on_tailnet(node_name=hostname, lookup=tailscale_lookup):
+        if _node_is_on_tailnet(row, lookup=tailscale_lookup):
             continue
         disconnected_candidates.append((hostname, row))
 
