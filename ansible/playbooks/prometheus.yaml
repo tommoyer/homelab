@@ -1,0 +1,29 @@
+---
+# Deploy Prometheus config and restart service when it changes.
+#
+# Usage:
+#   ansible-playbook playbooks/prometheus.yaml
+#   ansible-playbook playbooks/prometheus.yaml --limit prometheus
+#   ansible-playbook playbooks/prometheus.yaml -e target_hosts=prometheus
+
+- name: Configure Prometheus server
+  hosts: "{{ target_hosts | default('prometheuss') }}"
+  gather_facts: yes
+  become: yes
+
+  tasks:
+    - name: Deploy Prometheus configuration
+      ansible.builtin.template:
+        src: ../templates/prometheus.yml.j2
+        dest: /etc/prometheus/prometheus.yml
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart prometheus
+
+  handlers:
+    - name: Restart prometheus
+      ansible.builtin.systemd:
+        name: prometheus
+        state: restarted
+        daemon_reload: yes

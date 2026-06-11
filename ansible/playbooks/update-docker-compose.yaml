@@ -13,7 +13,7 @@
 #   ansible-playbook playbooks/update-docker-compose.yaml -e target_hosts=myhosts
 #
 - name: Update Docker Compose services
-  hosts: "{{ target_hosts | default('services') }}"
+  hosts: "{{ target_hosts | default('servicess') }}"
   gather_facts: no
   become: yes
 

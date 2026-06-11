@@ -16,7 +16,7 @@
 #   compose_base_dir    Parent directory for all services. Default: /home/ansible
 #
 - name: Deploy Docker Compose service
-  hosts: "{{ target_hosts | default('gitea-runner') }}"
+  hosts: "{{ target_hosts | default('oxidizeds') }}"
   gather_facts: yes
   become: yes
 
@@ -26,15 +26,9 @@
     compose_deploy_dir: "{{ compose_base_dir }}/{{ service_name }}"
     _compose_template: "{{ playbook_dir }}/../files/{{ inventory_hostname }}/docker-compose.yaml"
     _env_template: "{{ playbook_dir }}/../templates/{{ inventory_hostname }}.env.j2"
+    oxidized_config_dir: "{{ compose_deploy_dir }}"
 
   tasks:
-    - name: Ensure gitea.priv.moyer.wtf is present in /etc/hosts
-      ansible.builtin.lineinfile:
-        path: /etc/hosts
-        line: "192.168.20.2 gitea.priv.moyer.wtf"
-        state: present
-        insertbefore: BOF
-
     # -------------------------------------------------------------------------
     # Pre-flight checks (run on controller, not on the remote host)
     # -------------------------------------------------------------------------
@@ -93,16 +87,29 @@
       register: _env_file
 
     # -------------------------------------------------------------------------
+    # Oxidized configuration files
+    # -------------------------------------------------------------------------
+    - name: Deploy oxidized config
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/oxidized-config.j2"
+        dest: "{{ oxidized_config_dir }}/config"
+        owner: root
+        group: root
+        mode: "0640"
+      notify: Restart oxidized container
+
+    - name: Deploy oxidized router.db inventory
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/oxidized-inventory.j2"
+        dest: "{{ oxidized_config_dir }}/router.db"
+        owner: root
+        group: root
+        mode: "0640"
+      notify: Restart oxidized container
+
+    # -------------------------------------------------------------------------
     # Pull images and (re)start services
     # -------------------------------------------------------------------------
-
-    - name: Log in to Gitea Container Registry
-      community.docker.docker_login:
-        registry_url: "https://gitea.priv.moyer.wtf"
-        username: "ansible"
-        password: "{{ ansible_gitea_pat }}"
-        reauthorize: yes
-
     - name: Pull Docker images
       ansible.builtin.command:
         cmd: docker compose pull
@@ -119,3 +126,9 @@
         'Started' in _compose_up.stdout or
         'Created' in _compose_up.stdout or
         'Recreated' in _compose_up.stdout
+
+  handlers:
+    - name: Restart oxidized container
+      ansible.builtin.command:
+        cmd: docker compose restart oxidized
+        chdir: "{{ compose_deploy_dir }}"

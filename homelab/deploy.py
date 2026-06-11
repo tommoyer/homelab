@@ -35,22 +35,28 @@ from .ssh import prefix_sshpass, require_command, sshpass_env_from_password_env
 logger = logging.getLogger(__name__)
 
 
-def run_ansible_playbooks(hostname: str, config_path: Path, settings: dict, node_cfg: dict, extra_playbooks: list[str] | None = None) -> bool:
+def run_ansible_playbooks(
+    hostname: str,
+    config_path: Path,
+    settings: dict,
+    node_cfg: dict,
+    role_playbooks: list[str] | None = None,
+) -> bool:
     """
-    Run bootstrap.yaml, hardening.yaml, and any additional playbooks for the given hostname.
-    
+    Run role-mapped Ansible playbooks for the given hostname.
+
     Args:
         hostname: Target hostname to limit ansible execution
         config_path: Path to config file (for environment setup)
-        extra_playbooks: Optional list of additional playbook names to run after bootstrap and hardening
-        
+        role_playbooks: Optional list of playbook names derived from Role column values
+
     Returns:
         True if all playbooks succeed, False otherwise
     """
     repo_root = Path(__file__).resolve().parents[1]
     ansible_dir = repo_root / "ansible"
     inventory_script = ansible_dir / "inventory" / "inventory-spreadsheet.py"
-    playbooks = ["bootstrap.yaml", "hardening.yaml"]
+    playbooks: list[str] = []
 
     effective_settings = dict(settings)
     overrides = node_cfg.get("settings_override") or {}
@@ -58,18 +64,22 @@ def run_ansible_playbooks(hostname: str, config_path: Path, settings: dict, node
         effective_settings.update(overrides)
 
     apply = bool(effective_settings.get("apply", False))
-    
-    # Append extra playbooks if provided
-    if extra_playbooks:
-        playbooks.extend(extra_playbooks)
+
+    # Append role-mapped playbooks if provided
+    if role_playbooks:
+        playbooks.extend(role_playbooks)
+
+    if not playbooks:
+        logger.info("No role-mapped Ansible playbooks configured for %s; skipping Ansible phase.", hostname)
+        return True
     env = os.environ.copy()
     env["ANSIBLE_CONFIG"] = str(ansible_dir / "ansible.cfg")
     success = True
     for playbook in playbooks:
         playbook_path = ansible_dir / "playbooks" / playbook
         if not playbook_path.exists():
-            logger.error(f"Playbook not found: {playbook_path}")
-            return False
+            logger.warning("Playbook not found (skipping): %s", playbook_path)
+            continue
         cmd = [
             "ansible-playbook",
             "-i", str(inventory_script),
@@ -84,101 +94,117 @@ def run_ansible_playbooks(hostname: str, config_path: Path, settings: dict, node
             continue
         else:
             try:
-                result = subprocess.run(cmd, env=env, check=True)
+                subprocess.run(cmd, env=env, check=True)
             except subprocess.CalledProcessError as exc:
                 logger.error(f"Ansible playbook failed: {playbook} for {hostname}: {exc}")
                 success = False
     return success
 
 
-def _parse_playbooks_value(value: object) -> list[str]:
+def _parse_roles_value(value: object) -> list[str]:
     """
-    Parse a semicolon-separated Playbooks cell into a list of playbook names.
-    
+    Parse a role cell into a list of role names.
+
+    Supports comma- or semicolon-separated role names. Empty values produce [].
+
     Args:
-        value: Raw value from Nodes sheet Playbooks column
-        
+        value: Raw value from Nodes sheet Role column
+
     Returns:
-        List of playbook names (stripped, non-empty)
-        
+        List of role names (stripped, non-empty)
+
     Example:
-        "app.yaml; monitoring.yaml" -> ["app.yaml", "monitoring.yaml"]
+        "pihole; monitoring" -> ["pihole", "monitoring"]
+        "pihole,monitoring" -> ["pihole", "monitoring"]
         "" -> []
         None -> []
     """
     import pandas as pd
-    
+
     if not value or (isinstance(value, float) and pd.isna(value)):
         return []
-    
-    playbooks_str = str(value).strip()
-    if not playbooks_str:
+
+    roles_str = str(value).strip()
+    if not roles_str:
         return []
-    
-    return [p.strip() for p in playbooks_str.split(";") if p.strip()]
+
+    normalized = roles_str.replace(",", ";")
+    return [r.strip() for r in normalized.split(";") if r.strip()]
+
+
+def _map_roles_to_playbooks(roles: list[str]) -> list[str]:
+    """Map role names to playbook filenames: <role> -> <role>.yaml."""
+
+    playbooks: list[str] = []
+    for role in roles:
+        role_clean = as_str(role).strip()
+        if not role_clean:
+            continue
+        playbooks.append(f"{role_clean}.yaml")
+    return playbooks
 
 
 def _select_deployable_node(nodes_df: pd.DataFrame) -> str | None:
     """
     Present an interactive curses menu of deployable nodes.
-    
+
     A node is deployable if:
-    - Managed is true, OR
+    - Role is set, OR
     - Script URL is set
-    
+
     Returns:
         Selected hostname, or None if user cancels
     """
     df_norm = df_with_normalized_columns(nodes_df)
-    
+
     # Find deployable nodes
     deployable = []
     for _, row in df_norm.iterrows():
         hostname = as_str(row.get("hostname", "")).strip()
         if not hostname:
             continue
-            
-        managed = as_str(row.get("managed", "")).lower() in {"true", "yes", "1"}
+
+        roles = _parse_roles_value(row.get("role", row.get("roles", "")))
         script_url = as_str(row.get("script_url", "")).strip()
-        
-        if managed or script_url:
+
+        if roles or script_url:
             # Build deployment type label
             parts = []
             if script_url:
                 parts.append("Helper")
-            if managed:
+            if roles:
                 parts.append("Ansible")
             deploy_type = " + ".join(parts)
-            
+
             deployable.append({
                 "hostname": hostname,
                 "deploy_type": deploy_type,
             })
-    
+
     if not deployable:
-        print("No deployable nodes found (need Managed=true or Script URL set).", file=sys.stderr)
+        print("No deployable nodes found (need Role set or Script URL set).", file=sys.stderr)
         return None
-    
+
     # Sort by hostname
     deployable.sort(key=lambda x: x["hostname"])
-    
+
     # Use curses for menu
     def _curses_menu(stdscr: "curses._CursesWindow") -> str | None:  # type: ignore[name-defined]
         """Display curses menu and return selected hostname."""
         curses.curs_set(0)
         selected = 0
-        
+
         while True:
             stdscr.clear()
             height, width = stdscr.getmaxyx()
-            
+
             # Header
             stdscr.addstr(0, 0, "=" * min(width - 1, 80))
             stdscr.addstr(1, 0, "  SELECT NODE TO DEPLOY")
             stdscr.addstr(2, 0, "=" * min(width - 1, 80))
             stdscr.addstr(3, 0, "Use ↑/↓ to select, Enter to deploy, q to quit")
             stdscr.addstr(4, 0, "-" * min(width - 1, 80))
-            
+
             # Menu items
             for idx, node in enumerate(deployable):
                 prefix = "▶" if idx == selected else " "
@@ -189,13 +215,13 @@ def _select_deployable_node(nodes_df: pd.DataFrame) -> str | None:
                         stdscr.addstr(y_pos, 0, label[: width - 1])
                     except curses.error:
                         pass  # Ignore if we run out of screen space
-            
+
             # Get input
             try:
                 ch = stdscr.getch()
             except KeyboardInterrupt:
                 return None
-            
+
             if ch in (ord("q"), ord("Q"), 27):  # q, Q, or ESC
                 return None
             elif ch == curses.KEY_UP:
@@ -204,7 +230,7 @@ def _select_deployable_node(nodes_df: pd.DataFrame) -> str | None:
                 selected = (selected + 1) % len(deployable)
             elif ch in (10, 13, curses.KEY_ENTER):  # Enter
                 return deployable[selected]["hostname"]
-    
+
     try:
         return curses.wrapper(_curses_menu)
     except KeyboardInterrupt:
@@ -964,14 +990,14 @@ def _proxmox_hostname_exists(
 def main(argv: list[str] | argparse.Namespace | None = None) -> int:
     """
     Deploy a homelab node using either Proxmox Helper Scripts, Ansible, or both.
-    
+
     Deployment flow is determined by two Nodes sheet columns:
     - Script URL: If set, run the Proxmox Helper Script
-    - Managed: If true, run Ansible (bootstrap + hardening + extra playbooks from Playbooks column)
-    
+    - Role: If set, run Ansible playbooks mapped as <role>.yaml
+
     Examples:
     - Script URL only -> helper script only
-    - Managed=true only -> bootstrap + hardening + extra playbooks
+    - Role only -> role-mapped playbooks
     - Both set -> helper script first, then ansible
     - Neither set -> no-op (skip deployment)
     """
@@ -1012,7 +1038,7 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
         return 1
 
     nodes_lookup = load_nodes_lookup(nodes_df)
-    
+
     # If hostname not provided, show interactive menu
     if args.hostname is None:
         selected = _select_deployable_node(nodes_df)
@@ -1021,7 +1047,7 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
             return 0
         args.hostname = selected
         logger.info("Selected node: %s", args.hostname)
-    
+
     # Configure logging level based on --debug flag
     if getattr(args, "debug", False):
         logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
@@ -1030,7 +1056,7 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
 
     if keep_downloads:
         logger.debug("Keeping downloaded sheet CSV files enabled")
-    
+
     logger.info("Starting deployment for node: %s", args.hostname)
 
     # Build Tailscale-aware resolver and stash it inside nodes_lookup so that
@@ -1038,7 +1064,7 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
     # call chain) can use it transparently.
     resolver = build_resolver(config_dict, nodes_df)
     nodes_lookup["_resolver"] = resolver  # type: ignore[assignment]
-        
+
     try:
         node_cfg = get_node_config(nodes_df, args.hostname)
         logger.debug("node_cfg keys: %s", list(node_cfg.keys()))
@@ -1060,20 +1086,21 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
     logger.debug("Node config row for hostname '%s': %s", args.hostname, row.to_dict())
 
     script_url = as_str(node_cfg.get("script_url", "")).strip()
-    managed = as_str(row.get("managed", "")).lower() in {"true", "yes", "1"}
-    playbooks_value = row.get("playbooks", "")
+    role_value = row.get("role", row.get("roles", ""))
+    roles = _parse_roles_value(role_value)
+    role_playbooks = _map_roles_to_playbooks(roles)
 
-    logger.debug("Deployment config: script_url='%s', managed=%s, playbooks='%s'",
-                 script_url, managed, playbooks_value)
+    logger.debug("Deployment config: script_url='%s', roles=%s, role_playbooks=%s",
+                 script_url, roles, role_playbooks)
     logger.info("Deployment plan for '%s': run_helper=%s, run_ansible=%s",
-                args.hostname, bool(script_url), managed)
+                args.hostname, bool(script_url), bool(role_playbooks))
 
     # Determine what to run
     run_helper = bool(script_url)
-    run_ansible = managed
-    
+    run_ansible = bool(role_playbooks)
+
     if not run_helper and not run_ansible:
-        logger.info("Node '%s' has no Script URL and Managed=false. Skipping deployment.", args.hostname)
+        logger.info("Node '%s' has no Script URL and no Role set. Skipping deployment.", args.hostname)
         return 0
 
     # Phase 1: Run Proxmox Helper Script if Script URL is set
@@ -1094,7 +1121,7 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
         ):
             logger.info("Skipping Proxmox Helper Script because '%s' already exists in the cluster.", args.hostname)
             run_helper = False
-        
+
         if run_helper:
             logger.info("=" * 60)
             logger.info("PHASE 1: Running Proxmox Helper Script")
@@ -1113,29 +1140,23 @@ def main(argv: list[str] | argparse.Namespace | None = None) -> int:
             logger.info("=" * 60)
             logger.info("PHASE 1: Proxmox Helper Script completed successfully")
             logger.info("=" * 60)
-    
-    # Phase 2: Run Ansible if Managed is true
+
+    # Phase 2: Run Ansible if Role is set
     if run_ansible:
         logger.info("=" * 60)
         logger.info("PHASE 2: Running Ansible Playbooks")
         logger.info("Node: %s", args.hostname)
         logger.info("=" * 60)
-        
-        # Parse extra playbooks from Playbooks column
-        extra_playbooks = _parse_playbooks_value(playbooks_value)
-        
-        if extra_playbooks:
-            logger.info("Playbooks: bootstrap + hardening + %s", extra_playbooks)
-        else:
-            logger.info("Playbooks: bootstrap + hardening only")
-        
-        ansible_success = run_ansible_playbooks(args.hostname, config_path, settings, node_cfg, extra_playbooks)
+
+        logger.info("Role-mapped playbooks: %s", role_playbooks)
+
+        ansible_success = run_ansible_playbooks(args.hostname, config_path, settings, node_cfg, role_playbooks)
         if not ansible_success:
             logger.error("Ansible playbooks failed for %s", args.hostname)
             return 1
         logger.info("=" * 60)
         logger.info("PHASE 2: Ansible playbooks completed successfully")
         logger.info("=" * 60)
-    
+
     logger.info("Deployment completed successfully for %s", args.hostname)
     return 0

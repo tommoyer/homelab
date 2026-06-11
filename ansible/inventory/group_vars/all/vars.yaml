@@ -1,0 +1,70 @@
+---
+# Global variables for all hosts
+ansible_python_interpreter: /usr/bin/python3
+
+# Authentik configuration
+# authentik_url: "https://authentik.yourdomain.com"
+# authentik_ldap_uri: "ldap://authentik.yourdomain.com:389"
+# authentik_ldap_base_dn: "dc=ldap,dc=goauthentik,dc=io"
+
+# Network defaults
+dns_servers:
+  - 192.168.100.2
+
+# Service defaults
+service_restart_policy: unless-stopped
+
+oxidized_username: oxidized
+
+# -----------------------------------------------------------------------------
+# Proxmox API
+# Variables for hosts with spreadsheet role "proxmox-dns".
+# Preferred auth: API token (Datacenter -> Permissions -> API Tokens).
+# -----------------------------------------------------------------------------
+
+# Proxmox API endpoint (VIP or a node that serves the API)
+proxmox_api_host: "192.168.10.15"
+
+# Proxmox API user (must include realm)
+proxmox_api_user: "root@pam"
+
+# TLS: Proxmox often uses a self-signed cert
+proxmox_api_validate_certs: false
+
+# Token auth (preferred)
+proxmox_api_token_id: "root@pam!ansible"
+proxmox_api_token_secret: "{{ lookup('env', 'PROXMOX_API_TOKEN_SECRET') }}"
+
+# Password auth (fallback; only used if token secret is not provided)
+# proxmox_api_password: "{{ lookup('env', 'PROXMOX_PASSWORD') }}"
+
+# -----------------------------------------------------------------------------
+# Kanidm client (Debian hosts)
+# -----------------------------------------------------------------------------
+
+kanidm_uri: "https://kanidm.moyer.wtf"
+
+kanidm_login_groups:
+  - "linux_users"
+  - "linux_admins"
+
+kanidm_admin_group: "linux_admins"
+
+kanidm_uid_attr_map: "name"
+kanidm_gid_attr_map: "name"
+
+kanidm_home_prefix: "/home/"
+kanidm_home_attr: "uuid"
+kanidm_home_alias: "name"
+kanidm_use_etc_skel: true
+kanidm_default_shell: "/bin/bash"
+
+kanidm_ca_src: "kanidm-ca.crt"
+kanidm_ca_dest: "/usr/local/share/ca-certificates/kanidm-ca.crt"
+
+kanidm_ppa_key_url: "https://kanidm.github.io/kanidm_ppa/kanidm_ppa.asc"
+kanidm_ppa_list_url: "https://kanidm.github.io/kanidm_ppa/kanidm_ppa.list"
+
+kanidm_service_account_enabled: false
+kanidm_service_account_token: ""
+kanidm_service_account_token_path: "/etc/kanidm/unixd_token"

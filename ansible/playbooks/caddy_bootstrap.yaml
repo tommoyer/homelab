@@ -1,6 +1,6 @@
 ---
 - name: Build and install Caddy with Cloudflare DNS module
-  hosts: "{{ target_hosts | default('caddy') }}"
+  hosts: "{{ target_hosts | default('caddys') }}"
   gather_facts: yes
   become: yes
 

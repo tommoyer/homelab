@@ -1,0 +1,10 @@
+machine:
+  network:
+    hostname: talos-vm-2
+  certSANs:
+    - 192.168.30.20
+    - talos-vm-2.homelab.moyer.wtf
+    - talos-vm-2.moyer.wtf
+    - talos.moyer.wtf
+    - talos.homelab.moyer.wtf
+    - 192.168.30.21

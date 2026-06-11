@@ -23,7 +23,7 @@
 #   caddy_cert_filename     Filename on caddy_host. Default: <kanidm_domain>-chain.pem
 #
 - name: Deploy Kanidm Docker Compose stack
-  hosts: "{{ target_hosts | default('kanidm') }}"
+  hosts: "{{ target_hosts | default('kanidms') }}"
   gather_facts: yes
   become: yes
 

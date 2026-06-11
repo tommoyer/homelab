@@ -1,5 +1,5 @@
 # Ansible playbook to enable non-free repos, install firmware-amd-graphics, and install ROCm on Debian 13 (Trixie)
-- hosts: "{{ target_hosts | default('ollama') }}"
+- hosts: "{{ target_hosts | default('ollamas') }}"
   become: true
   vars:
     rocm_version: "7.2.1"
@@ -100,7 +100,7 @@
       ansible.builtin.debug:
         msg: "ROCm and firmware installed. A reboot may be required for changes to take effect."
 
-- hosts: "{{ target_hosts | default('ollama') }}"
+- hosts: "{{ target_hosts | default('ollamas') }}"
   become: true
   vars:
     ollama_service_user: ollama

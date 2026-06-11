@@ -16,7 +16,7 @@
 #   compose_base_dir    Parent directory for all services. Default: /home/ansible
 #
 - name: Deploy Docker Compose service
-  hosts: "{{ target_hosts | default('minecraft') }}"
+  hosts: "{{ target_hosts | default('minecrafts') }}"
   gather_facts: yes
   become: yes
 

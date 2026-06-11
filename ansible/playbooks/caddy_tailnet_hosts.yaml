@@ -16,7 +16,7 @@
 #                            Tailscale IPv4. Default: [].
 #
 - name: Ensure Caddy tailnet hosts entry exists
-  hosts: "{{ target_hosts | default('services') }}"
+  hosts: "{{ target_hosts | default('servicess') }}"
   gather_facts: false
   become: true
 

@@ -1,0 +1,404 @@
+{
+  "_meta": {
+    "hostvars": {
+      "apt-cache": {
+        "ansible_host": "192.168.30.22",
+        "host_ip": "192.168.30.22"
+      },
+      "caddy": {
+        "ansible_host": "caddy.duckbill-frog.ts.net",
+        "host_ip": "192.168.20.2"
+      },
+      "desktop-0": {
+        "ansible_host": "desktop-0.duckbill-frog.ts.net",
+        "host_ip": "192.168.10.6"
+      },
+      "firefly-iii": {
+        "ansible_host": "firefly-iii.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.15"
+      },
+      "freshrss": {
+        "ansible_host": "freshrss.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.16"
+      },
+      "gitea": {
+        "ansible_host": "gitea.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.12"
+      },
+      "gitea-runner": {
+        "ansible_host": "gitea-runner.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.13"
+      },
+      "grafana": {
+        "ansible_host": "grafana.duckbill-frog.ts.net",
+        "host_ip": "192.168.10.13"
+      },
+      "guac": {
+        "ansible_host": "guac.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.17"
+      },
+      "homarr": {
+        "ansible_host": "homarr.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.7"
+      },
+      "jellyfin": {
+        "ansible_host": "jellyfin.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.9"
+      },
+      "kanidm": {
+        "ansible_host": "kanidm.duckbill-frog.ts.net",
+        "host_ip": "192.168.10.12"
+      },
+      "meer5-0": {
+        "ansible_host": "meer5-0.duckbill-frog.ts.net",
+        "host_ip": "192.168.10.7"
+      },
+      "meer8-0": {
+        "ansible_host": "meer8-0.duckbill-frog.ts.net",
+        "host_ip": "192.168.10.8"
+      },
+      "meer8-1": {
+        "ansible_host": "meer8-1.duckbill-frog.ts.net",
+        "host_ip": "192.168.10.9"
+      },
+      "meer8-2": {
+        "ansible_host": "meer8-2.duckbill-frog.ts.net",
+        "host_ip": "192.168.10.10"
+      },
+      "minecraft": {
+        "ansible_host": "minecraft.duckbill-frog.ts.net",
+        "host_ip": "192.168.20.3"
+      },
+      "ollama": {
+        "ansible_host": "ollama.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.11"
+      },
+      "openwebui": {
+        "ansible_host": "openwebui.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.10"
+      },
+      "oxidized": {
+        "ansible_host": "oxidized.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.19",
+        "oxidized_devices": [
+          {
+            "ip": "192.168.10.1",
+            "model": "routeros",
+            "name": "hexs"
+          },
+          {
+            "ip": "192.168.10.2",
+            "model": "routeros",
+            "name": "crs"
+          }
+        ]
+      },
+      "paperclip": {
+        "ansible_host": "paperclip.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.18"
+      },
+      "pbs": {
+        "ansible_host": "pbs.duckbill-frog.ts.net",
+        "host_ip": "192.168.10.11"
+      },
+      "pihole": {
+        "ansible_host": "pihole.duckbill-frog.ts.net",
+        "host_ip": "192.168.100.2"
+      },
+      "prometheus": {
+        "ansible_host": "prometheus.duckbill-frog.ts.net",
+        "host_ip": "192.168.10.5"
+      },
+      "services": {
+        "ansible_host": "services.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.5"
+      },
+      "smtp-relay": {
+        "ansible_host": "smtp-relay.duckbill-frog.ts.net",
+        "host_ip": "192.168.10.14"
+      },
+      "syncthing": {
+        "ansible_host": "syncthing.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.2"
+      },
+      "tandoor": {
+        "ansible_host": "tandoor.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.4"
+      },
+      "ts-router": {
+        "ansible_host": "ts-router.duckbill-frog.ts.net",
+        "host_ip": "192.168.20.4"
+      },
+      "uptime-kuma": {
+        "ansible_host": "uptime-kuma.duckbill-frog.ts.net",
+        "host_ip": "192.168.10.16"
+      },
+      "vaultwarden": {
+        "ansible_host": "vaultwarden.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.6"
+      },
+      "www": {
+        "ansible_host": "www.duckbill-frog.ts.net",
+        "host_ip": "192.168.30.14"
+      }
+    }
+  },
+  "all": {
+    "children": [
+      "apt_cacher_ng_clients",
+      "caddy_bootstraps",
+      "gitea_runners",
+      "kanidm_clients",
+      "kanidm_ldaps",
+      "minecrafts",
+      "node_exporters",
+      "ollamas",
+      "oxidizeds",
+      "piholes",
+      "pves",
+      "servicess",
+      "ts_routers",
+      "ts_skip_route_accept",
+      "wwws"
+    ],
+    "hosts": [
+      "apt-cache",
+      "caddy",
+      "desktop-0",
+      "firefly-iii",
+      "freshrss",
+      "gitea",
+      "gitea-runner",
+      "grafana",
+      "guac",
+      "homarr",
+      "jellyfin",
+      "kanidm",
+      "meer5-0",
+      "meer8-0",
+      "meer8-1",
+      "meer8-2",
+      "minecraft",
+      "ollama",
+      "openwebui",
+      "oxidized",
+      "paperclip",
+      "pbs",
+      "pihole",
+      "prometheus",
+      "services",
+      "smtp-relay",
+      "syncthing",
+      "tandoor",
+      "ts-router",
+      "uptime-kuma",
+      "vaultwarden",
+      "www"
+    ]
+  },
+  "apt_cacher_ng_clients": {
+    "hosts": [
+      "apt-cache",
+      "caddy",
+      "desktop-0",
+      "firefly-iii",
+      "freshrss",
+      "gitea",
+      "gitea-runner",
+      "grafana",
+      "guac",
+      "homarr",
+      "jellyfin",
+      "kanidm",
+      "meer5-0",
+      "meer8-0",
+      "meer8-1",
+      "meer8-2",
+      "minecraft",
+      "ollama",
+      "openwebui",
+      "oxidized",
+      "paperclip",
+      "pbs",
+      "pihole",
+      "prometheus",
+      "services",
+      "smtp-relay",
+      "syncthing",
+      "tandoor",
+      "ts-router",
+      "uptime-kuma",
+      "vaultwarden",
+      "www"
+    ]
+  },
+  "caddy_bootstraps": {
+    "hosts": [
+      "caddy"
+    ]
+  },
+  "gitea_runners": {
+    "hosts": [
+      "gitea-runner"
+    ]
+  },
+  "kanidm_clients": {
+    "hosts": [
+      "apt-cache",
+      "caddy",
+      "desktop-0",
+      "firefly-iii",
+      "freshrss",
+      "gitea",
+      "gitea-runner",
+      "grafana",
+      "guac",
+      "homarr",
+      "jellyfin",
+      "kanidm",
+      "meer5-0",
+      "meer8-0",
+      "meer8-1",
+      "meer8-2",
+      "minecraft",
+      "ollama",
+      "openwebui",
+      "oxidized",
+      "paperclip",
+      "pbs",
+      "pihole",
+      "prometheus",
+      "services",
+      "smtp-relay",
+      "syncthing",
+      "tandoor",
+      "ts-router",
+      "uptime-kuma",
+      "vaultwarden",
+      "www"
+    ]
+  },
+  "kanidm_ldaps": {
+    "hosts": [
+      "guac"
+    ]
+  },
+  "minecrafts": {
+    "hosts": [
+      "minecraft"
+    ]
+  },
+  "node_exporters": {
+    "hosts": [
+      "apt-cache",
+      "caddy",
+      "desktop-0",
+      "firefly-iii",
+      "freshrss",
+      "gitea",
+      "gitea-runner",
+      "grafana",
+      "guac",
+      "homarr",
+      "jellyfin",
+      "kanidm",
+      "meer5-0",
+      "meer8-0",
+      "meer8-1",
+      "meer8-2",
+      "minecraft",
+      "ollama",
+      "openwebui",
+      "oxidized",
+      "paperclip",
+      "pbs",
+      "pihole",
+      "prometheus",
+      "services",
+      "smtp-relay",
+      "syncthing",
+      "tandoor",
+      "ts-router",
+      "uptime-kuma",
+      "vaultwarden",
+      "www"
+    ]
+  },
+  "ollamas": {
+    "hosts": [
+      "ollama"
+    ]
+  },
+  "oxidizeds": {
+    "hosts": [
+      "oxidized"
+    ]
+  },
+  "piholes": {
+    "hosts": [
+      "pihole"
+    ]
+  },
+  "pves": {
+    "hosts": [
+      "desktop-0",
+      "kanidm",
+      "meer5-0",
+      "meer8-0",
+      "meer8-1",
+      "meer8-2",
+      "pbs"
+    ]
+  },
+  "servicess": {
+    "hosts": [
+      "services"
+    ]
+  },
+  "ts_routers": {
+    "hosts": [
+      "ts-router"
+    ]
+  },
+  "ts_skip_route_accept": {
+    "hosts": [
+      "apt-cache",
+      "caddy",
+      "desktop-0",
+      "firefly-iii",
+      "freshrss",
+      "gitea",
+      "gitea-runner",
+      "grafana",
+      "guac",
+      "homarr",
+      "jellyfin",
+      "kanidm",
+      "meer5-0",
+      "meer8-0",
+      "meer8-1",
+      "meer8-2",
+      "minecraft",
+      "ollama",
+      "openwebui",
+      "oxidized",
+      "paperclip",
+      "pbs",
+      "pihole",
+      "prometheus",
+      "services",
+      "smtp-relay",
+      "syncthing",
+      "tandoor",
+      "ts-router",
+      "uptime-kuma",
+      "vaultwarden",
+      "www"
+    ]
+  },
+  "wwws": {
+    "hosts": [
+      "www"
+    ]
+  }
+}

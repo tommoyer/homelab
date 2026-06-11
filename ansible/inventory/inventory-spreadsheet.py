@@ -90,6 +90,18 @@ def normalize_group_name(value: str) -> str:
     return cleaned
 
 
+def pluralize_group_name(group: str) -> str:
+    """Return a simple plural form for an Ansible inventory group name."""
+
+    if not group:
+        return ""
+    if group.endswith(("x", "z", "ch", "sh")):
+        return f"{group}es"
+    if re.search(r"[^aeiou]y$", group):
+        return f"{group[:-1]}ies"
+    return f"{group}s"
+
+
 def load_effective_inventory_config(config_path: Path) -> dict[str, Any]:
     config = load_toml_or_exit(config_path)
     effective = get_effective_table(config, "inventory")
@@ -133,6 +145,7 @@ def build_inventory(cfg: dict[str, Any], *, use_tailscale: bool = True) -> dict[
     proxmox_type_col = normalize_column_name(str(cfg.get("proxmox_type_col", "Proxmox Type")))
 
     accept_ts_routes_col = normalize_column_name(str(cfg.get("accept_ts_routes_col", "Accept TS Routes")))
+    oxidized_model_col = normalize_column_name(str(cfg.get("oxidized_model_col", "Oxidized Model")))
 
     required_cols = [managed_col, hostname_col, ip_col]
     missing = [col for col in required_cols if col not in set(df.columns)]
@@ -144,9 +157,20 @@ def build_inventory(cfg: dict[str, Any], *, use_tailscale: bool = True) -> dict[
     hosts: list[str] = []
     hostvars: dict[str, dict[str, Any]] = {}
     groups: dict[str, set[str]] = {}
+    oxidized_device_rows: list[dict[str, str]] = []
 
     for _, row in df.iterrows():
         row_dict = row.to_dict()
+
+        hostname = as_str(row_dict.get(hostname_col))
+
+        # Collect oxidized backup devices regardless of managed flag —
+        # network devices are not Ansible-managed but still need to be backed up
+        if oxidized_model_col in set(df.columns) and hostname:
+            model = as_str(row_dict.get(oxidized_model_col))
+            ip = as_str(row_dict.get(ip_col))
+            if model and ip:
+                oxidized_device_rows.append({"name": hostname, "ip": ip, "model": model})
 
         if not parse_bool(row_dict.get(managed_col), default=False):
             continue
@@ -163,7 +187,7 @@ def build_inventory(cfg: dict[str, Any], *, use_tailscale: bool = True) -> dict[
             )
 
         hosts.append(hostname)
-        hostvars[hostname] = {"ansible_host": resolver.resolve(hostname) or ip_address}
+        hostvars[hostname] = {"ansible_host": resolver.resolve(hostname) or ip_address, "host_ip": ip_address}
 
         host_groups: set[str] = set()
         if roles_col in set(df.columns):
@@ -172,7 +196,7 @@ def build_inventory(cfg: dict[str, Any], *, use_tailscale: bool = True) -> dict[
                 for role in (part.strip() for part in roles_raw.split(";")):
                     if not role:
                         continue
-                    group = normalize_group_name(role)
+                    group = pluralize_group_name(normalize_group_name(role))
                     if not group:
                         continue
                     host_groups.add(group)
@@ -234,6 +258,15 @@ def build_inventory(cfg: dict[str, Any], *, use_tailscale: bool = True) -> dict[
                 proxmox_type = as_str(row_dict.get("proxmox_type")).lower()
                 if proxmox_type:
                     hostvars[hostname]["proxmox_type"] = proxmox_type
+
+    # Assign oxidized_devices list to the host named "oxidized" (or hosts in
+    # an "oxidized" group if one exists)
+    if oxidized_device_rows:
+        oxidized_targets = groups.get("oxidizeds", set()) or groups.get("oxidized", set())
+        if not oxidized_targets and "oxidized" in hostvars:
+            oxidized_targets = {"oxidized"}
+        for oxidized_host in oxidized_targets:
+            hostvars.setdefault(oxidized_host, {})["oxidized_devices"] = oxidized_device_rows
 
     # Stable output
     unique_hosts = sorted(set(hosts))
