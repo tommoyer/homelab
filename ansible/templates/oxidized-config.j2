@@ -1,0 +1,28 @@
+username: oxidized
+password: your-password
+model: routeros
+interval: 3600
+log: ~/.config/oxidized/log
+debug: false
+threads: 30
+timeout: 20
+retries: 3
+
+output:
+  default: git
+  git:
+    user: oxidized
+    email: oxidized@moyer.wtf
+    repo: "/var/lib/oxidized/devices.git"
+    single_repo: true
+
+source:
+  default: csv
+  csv:
+    file: ~/.config/oxidized/router.db
+    delimiter: !ruby/regexp /:/
+    map:
+      name: 0
+      model: 1
+      username: 2
+      password: 3

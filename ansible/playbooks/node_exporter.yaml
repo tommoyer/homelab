@@ -12,7 +12,7 @@
 #   ansible-playbook playbooks/node-exporter.yaml -e node_exporter_version=1.9.1
 #
 - name: Install Prometheus node_exporter
-  hosts: "{{ target_hosts | default('node_exporter') }}"
+  hosts: "{{ target_hosts | default('node_exporters') }}"
   gather_facts: yes
   become: yes
 

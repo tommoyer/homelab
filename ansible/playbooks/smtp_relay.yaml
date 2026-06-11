@@ -24,7 +24,7 @@
 #   ansible-playbook playbooks/smtp-relay.yaml -e target_hosts=smtp-relay.lan
 
 - name: Provision Postfix SMTP relay
-  hosts: "{{ target_hosts | default('smtp-relay') }}"
+  hosts: "{{ target_hosts | default('smtp_relays') }}"
   gather_facts: yes
   become: yes
 

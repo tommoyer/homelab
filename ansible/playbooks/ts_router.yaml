@@ -1,6 +1,6 @@
 ---
 - name: Configure sysctl for Tailscale router
-  hosts: "{{ target_hosts | default('ts_router') }}"
+  hosts: "{{ target_hosts | default('ts_routers') }}"
   become: true
   gather_facts: true
   tasks:

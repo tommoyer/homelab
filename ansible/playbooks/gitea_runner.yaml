@@ -16,7 +16,7 @@
 #   compose_base_dir    Parent directory for all services. Default: /home/ansible
 #
 - name: Deploy Docker Compose service
-  hosts: "{{ target_hosts | default('uptime-kuma') }}"
+  hosts: "{{ target_hosts | default('gitea_runners') }}"
   gather_facts: yes
   become: yes
 
@@ -24,67 +24,34 @@
     service_name: "{{ inventory_hostname }}"
     compose_base_dir: /home/ansible
     compose_deploy_dir: "{{ compose_base_dir }}/{{ service_name }}"
-    _compose_file_src: "{{ playbook_dir }}/../files/uptime-kuma/docker-compose.yaml"
+    _compose_template: "{{ playbook_dir }}/../files/{{ inventory_hostname }}/docker-compose.yaml"
     _env_template: "{{ playbook_dir }}/../templates/{{ inventory_hostname }}.env.j2"
 
   tasks:
-    # -------------------------------------------------------------------------
-    # Install Docker from official Docker repositories
-    # -------------------------------------------------------------------------
-    - name: Install prerequisite packages
-      ansible.builtin.apt:
-        name:
-          - ca-certificates
-          - curl
+    - name: Ensure gitea.priv.moyer.wtf is present in /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "192.168.20.2 gitea.priv.moyer.wtf"
         state: present
-        update_cache: yes
-
-    - name: Ensure /etc/apt/keyrings directory exists
-      ansible.builtin.file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: "0755"
-
-    - name: Download Docker GPG key
-      ansible.builtin.get_url:
-        url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
-        dest: /etc/apt/keyrings/docker.asc
-        mode: "0644"
-
-    - name: Get dpkg architecture
-      ansible.builtin.command: dpkg --print-architecture
-      register: _dpkg_arch
-      changed_when: false
-
-    - name: Add Docker apt repository
-      ansible.builtin.apt_repository:
-        repo: >-
-          deb [arch={{ _dpkg_arch.stdout }} signed-by=/etc/apt/keyrings/docker.asc]
-          https://download.docker.com/linux/{{ ansible_distribution | lower }}
-          {{ ansible_distribution_release }} stable
-        state: present
-        filename: docker
-
-    - name: Install Docker packages
-      ansible.builtin.apt:
-        name:
-          - docker-ce
-          - docker-ce-cli
-          - containerd.io
-          - docker-buildx-plugin
-          - docker-compose-plugin
-        state: present
-        update_cache: yes
-
-    - name: Add ansible user to docker group
-      ansible.builtin.user:
-        name: ansible
-        groups: docker
-        append: yes
+        insertbefore: BOF
 
     # -------------------------------------------------------------------------
     # Pre-flight checks (run on controller, not on the remote host)
     # -------------------------------------------------------------------------
+    - name: Check whether docker-compose template exists on controller
+      ansible.builtin.stat:
+        path: "{{ _compose_template }}"
+      delegate_to: localhost
+      become: false
+      register: _compose_template_stat
+
+    - name: Fail when no compose template found for host
+      ansible.builtin.fail:
+        msg: >-
+          No compose template found for host '{{ inventory_hostname }}'.
+          Expected: {{ _compose_template }}
+      when: not _compose_template_stat.stat.exists
+
     - name: Check whether .env template exists on controller
       ansible.builtin.stat:
         path: "{{ _env_template }}"
@@ -107,13 +74,13 @@
     # Deploy compose file and optional .env
     # -------------------------------------------------------------------------
     - name: Deploy docker-compose.yaml
-      ansible.builtin.copy:
-        src: "{{ _compose_file_src }}"
+      ansible.builtin.template:
+        src: "{{ _compose_template }}"
         dest: "{{ compose_deploy_dir }}/docker-compose.yaml"
         owner: ansible
         group: ansible
         mode: "0640"
-      register: _compose_deployed
+      register: _compose_file
 
     - name: Deploy .env file
       ansible.builtin.template:
@@ -128,6 +95,14 @@
     # -------------------------------------------------------------------------
     # Pull images and (re)start services
     # -------------------------------------------------------------------------
+
+    - name: Log in to Gitea Container Registry
+      community.docker.docker_login:
+        registry_url: "https://gitea.priv.moyer.wtf"
+        username: "ansible"
+        password: "{{ ansible_gitea_pat }}"
+        reauthorize: yes
+
     - name: Pull Docker images
       ansible.builtin.command:
         cmd: docker compose pull
