@@ -1,6 +1,6 @@
-username: oxidized
-password: your-password
-model: routeros
+username: {{ oxidized_username }}
+password: {{ oxidized_password }}
+model: {{ oxidized_model | default('routeros') }}
 interval: 3600
 log: ~/.config/oxidized/log
 debug: false
@@ -11,10 +11,9 @@ retries: 3
 output:
   default: git
   git:
-    user: oxidized
-    email: oxidized@moyer.wtf
-    repo: "/var/lib/oxidized/devices.git"
-    single_repo: true
+    user: {{ oxidized_git_user | default('Oxidized') }}
+    email: {{ oxidized_git_email | default('oxidized@example.com') }}
+    repo: "{{ oxidized_git_repo | default('~/.config/oxidized/oxidized.git') }}"
 
 source:
   default: csv

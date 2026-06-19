@@ -1,0 +1,9 @@
+---
+# Run all update playbooks in sequence.
+#
+# Usage:
+#   ansible-playbook playbooks/run-updates.yaml
+#
+- import_playbook: update-apt.yaml
+- import_playbook: update-docker-compose.yaml
+- import_playbook: update-pve-script.yaml

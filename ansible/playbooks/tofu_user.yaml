@@ -1,0 +1,58 @@
+---
+- name: Configure Tofu user on Proxmox
+  hosts: pves[0]
+  gather_facts: no
+  remote_user: ansible
+  become: true
+  
+  vars_files:
+    - "../inventory/group_vars/all/vault.yaml"
+  
+  vars:
+    tofu_user: tofu-prov@pve
+    tofu_role: TofuProv
+    tofu_privileges: >
+      Datastore.AllocateSpace
+      Datastore.AllocateTemplate
+      Datastore.Audit
+      Pool.Allocate
+      Pool.Audit
+      Sys.Audit
+      Sys.Console
+      Sys.Modify
+      VM.Allocate
+      VM.Audit
+      VM.Clone
+      VM.Config.CDROM
+      VM.Config.Cloudinit
+      VM.Config.CPU
+      VM.Config.Disk
+      VM.Config.HWType
+      VM.Config.Memory
+      VM.Config.Network
+      VM.Config.Options
+      VM.Migrate
+      VM.PowerMgmt
+      SDN.Use
+
+  tasks:
+    - name: Create TofuProv role
+      ansible.builtin.shell: |
+        pveum role add {{ tofu_role }} -privs "{{ tofu_privileges | replace('\n', ' ') }}"
+      register: role_result
+      failed_when: role_result.rc not in [0, 270]  # 270 is role already exists error
+      changed_when: role_result.rc == 0
+
+    - name: Create tofu-prov user
+      ansible.builtin.shell: |
+        pveum user add {{ tofu_user }} --password "{{ tofu_prov_password }}"
+      register: user_result
+      failed_when: user_result.rc not in [0, 256]  # 256 is user already exists error
+      changed_when: user_result.rc == 0
+      no_log: true
+
+    - name: Apply TofuProv role to tofu-prov user
+      ansible.builtin.shell: |
+        pveum aclmod / -user {{ tofu_user }} -role {{ tofu_role }}
+      register: acl_result
+      changed_when: "'added' in acl_result.stdout or acl_result.rc == 0"

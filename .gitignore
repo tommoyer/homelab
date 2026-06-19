@@ -34,3 +34,7 @@ network-configs/cache
 external_records.json
 
 .vault-password
+
+*.tfstate
+*.tfstate.backup
+.terraform/
