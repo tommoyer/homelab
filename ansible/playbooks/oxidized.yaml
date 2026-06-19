@@ -27,6 +27,12 @@
     _compose_template: "{{ playbook_dir }}/../files/{{ inventory_hostname }}/docker-compose.yaml"
     _env_template: "{{ playbook_dir }}/../templates/{{ inventory_hostname }}.env.j2"
     oxidized_config_dir: "{{ compose_deploy_dir }}"
+    oxidized_router_group: routeros
+    oxidized_model: routeros
+
+  vars_files:
+    # ansible-vault encrypted; must define oxidized_password
+    - "{{ playbook_dir }}/../inventory/group_vars/all/vault.yaml"
 
   tasks:
     # -------------------------------------------------------------------------
@@ -52,6 +58,38 @@
       delegate_to: localhost
       become: false
       register: _env_template_stat
+
+    - name: Validate required Oxidized variables
+      ansible.builtin.assert:
+        that:
+          - oxidized_password is defined
+          - (oxidized_password | string | length) > 0
+          - oxidized_username is defined
+          - (oxidized_username | string | length) > 0
+        fail_msg: >-
+          Missing required Oxidized credentials. Ensure vault variable
+          'oxidized_password' and variable 'oxidized_username' are defined.
+
+    - name: Ensure router group exists and has devices
+      ansible.builtin.assert:
+        that:
+          - groups[oxidized_router_group] is defined
+          - (groups[oxidized_router_group] | length) > 0
+        fail_msg: >-
+          Inventory group '{{ oxidized_router_group }}' is missing or empty.
+          Add RouterOS devices to that group to generate router.db.
+
+    - name: Validate RouterOS devices have host_ip addresses
+      ansible.builtin.assert:
+        that:
+          - hostvars[item].host_ip is defined
+          - hostvars[item].host_ip | regex_search('^\\d{1,3}(\\.\\d{1,3}){3}$') is not none
+        fail_msg: >-
+          Host '{{ item }}' in group '{{ oxidized_router_group }}' must define
+          a numeric IPv4 'host_ip' for Oxidized router.db generation.
+      loop: "{{ groups[oxidized_router_group] }}"
+      loop_control:
+        label: "{{ item }}"
 
     # -------------------------------------------------------------------------
     # Directory layout

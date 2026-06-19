@@ -6,7 +6,7 @@
 #   ansible-playbook playbooks/update-apt.yaml -e target_hosts=myhosts
 #
 - name: Update packages via apt
-  hosts: "{{ target_hosts | default('all') }}"
+  hosts: "{{ target_hosts | default('update_apts') }}"
   gather_facts: yes
   become: yes
 

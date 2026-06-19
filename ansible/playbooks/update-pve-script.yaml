@@ -1,0 +1,34 @@
+---
+# Run Proxmox Helper Script `update` directly on hosts.
+#
+# This playbook is intended for hosts where the helper-script `update` command
+# is installed and can be run as root.
+#
+# Usage:
+#   ansible-playbook playbooks/update-pve-script.yaml
+#   ansible-playbook playbooks/update-pve-script.yaml -e target_hosts=update_pve_scripts
+#
+- name: Run helper-script update on selected hosts
+  hosts: "{{ target_hosts | default('update_pve_scripts') }}"
+  gather_facts: no
+  become: yes
+
+  tasks:
+    - name: Check update command exists
+      ansible.builtin.command: command -v update
+      register: _update_cmd_check
+      changed_when: false
+      failed_when: false
+
+    - name: Skip host when update command is missing
+      ansible.builtin.debug:
+        msg: "Skipping {{ inventory_hostname }}: update command not found"
+      when: _update_cmd_check.rc != 0
+
+    - name: Run helper-script update (send one Enter to continue silently)
+      ansible.builtin.command:
+        cmd: update
+        stdin: "\n"
+      register: _update_run
+      changed_when: true
+      when: _update_cmd_check.rc == 0

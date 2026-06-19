@@ -29,6 +29,18 @@ services:
       #NoPermCheck: "Y" # Optional flag to skip permissions check
       #NoViaVersion: "Y" # Optional flag to disable ViaVersion plugin
       #QuietCurl: "Y" # Optional flag to reduce curl log output by suppressing progress meter
+
+  dockerproxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:latest
+    container_name: dockerproxy
+    environment:
+      - CONTAINERS=1   # Allows read-only access to container list and status
+      - POST=0         # Blocks write commands for security
+    ports:
+      - "2375:2375"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
 volumes:
   minecraft:
     driver: local
