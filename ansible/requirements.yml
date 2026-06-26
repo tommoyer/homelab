@@ -4,7 +4,9 @@ collections:
   - name: ansible.posix
   - name: community.docker
   - name: community.general
+  - name: community.proxmox
 
 roles:
   - name: andrewrothstein.unarchivedeps
   - name: andrewrothstein.ollama
+  - name: geerlingguy.docker

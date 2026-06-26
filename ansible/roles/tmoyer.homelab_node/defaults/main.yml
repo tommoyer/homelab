@@ -1,0 +1,44 @@
+---
+# Feature flags — set these to true to enable each component
+homelab_node_bootstrap_enabled: false
+homelab_node_apt_cacher_ng_enabled: false
+homelab_node_hardening_enabled: true
+homelab_node_kanidm_enabled: false
+homelab_node_node_exporter_enabled: true
+homelab_node_tailscale_enabled: true
+
+# --- Bootstrap ---
+homelab_ansible_user: ansible
+homelab_ansible_home: /home/ansible
+homelab_ansible_ssh_pubkey_path: "~/.ssh/ansible.pub"
+homelab_node_bootstrap_remote_user: root
+homelab_node_reset_connection_after_bootstrap: true
+
+# --- apt-cacher-ng client ---
+apt_cacher_ng_url: "http://apt-cache.homelab.moyer.wtf:3142"
+apt_cacher_ng_config_file: /etc/apt/apt.conf.d/02-apt-cacher-ng
+
+# --- Hardening ---
+ssh_permit_root_login: "prohibit-password"
+ssh_password_authentication: "no"
+ssh_pubkey_authentication: "yes"
+ssh_challenge_response_authentication: "no"
+ssh_kbd_interactive_authentication: "yes"
+ssh_use_pam: "yes"
+hardening_manage_root_authorized_key: true
+hardening_root_ssh_pubkey_path: "~/.ssh/id_rsa.pub"
+
+# --- node_exporter ---
+node_exporter_version: "1.9.1"
+node_exporter_user: node_exporter
+node_exporter_install_dir: /usr/local/bin
+node_exporter_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+node_exporter_download_url: >-
+  https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-{{ node_exporter_arch }}.tar.gz
+
+# --- Tailscale ---
+homelab_node_tailscale_state: latest
+homelab_node_tailscale_up_skip: true
+homelab_node_tailscale_authkey: ""
+homelab_node_tailscale_args: ""
+homelab_node_tailscale_tags: []

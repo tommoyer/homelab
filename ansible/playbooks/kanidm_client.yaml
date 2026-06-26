@@ -11,7 +11,7 @@
         fail_msg: "This playbook supports Debian-based systems only."
 
   roles:
-    - role: kanidm_client
+    - role: tmoyer.kanidm_client
 
 - name: Prefer Kanidm before pam_unix in common-auth
   hosts: "{{ target_hosts | default('kanidm_clients') }}"

@@ -1,0 +1,14 @@
+---
+- name: Create apt-cacher-ng proxy configuration
+  ansible.builtin.copy:
+    dest: "{{ apt_cacher_ng_config_file }}"
+    content: |
+      // Proxy configuration for apt-cacher-ng
+      // Managed by Ansible - do not edit manually
+      Acquire::http::Proxy "{{ apt_cacher_ng_url }}";
+      Acquire::https::Proxy "{{ apt_cacher_ng_url }}";
+      Acquire::ftp::Proxy "{{ apt_cacher_ng_url }}";
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Update apt cache

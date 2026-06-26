@@ -1,10 +1,10 @@
 ---
 # Deploy Kanidm with Docker Compose to a specific host/group via `target_hosts`.
 #
-# For each targeted host this playbook expects:
-#   templates/<hostname>-kanidm-compose.yaml      (required, Jinja2)
-#   templates/<hostname>-kanidm-server.toml.j2    (required, Jinja2)
-#   templates/<hostname>-kanidm.env.j2            (optional, Jinja2)
+# This playbook expects:
+#   templates/kanidm/docker-compose.yaml.j2   (required, Jinja2)
+#   templates/kanidm/server.toml.j2           (required, Jinja2)
+#   templates/kanidm/*.env.j2                 (optional, Jinja2)
 #
 # Usage:
 #   ansible-playbook playbooks/kanidm.yaml -e target_hosts=my-kanidm-host
@@ -40,9 +40,10 @@
     caddy_cert_dir: /etc/caddy/certs
     caddy_cert_filename: "kanidm.pem"
 
-    _compose_template: "{{ playbook_dir }}/../templates/{{ inventory_hostname }}-kanidm-compose.yaml"
-    _server_template: "{{ playbook_dir }}/../templates/{{ inventory_hostname }}-kanidm-server.toml.j2"
-    _env_template: "{{ playbook_dir }}/../templates/{{ inventory_hostname }}-kanidm.env.j2"
+    _compose_template: "{{ playbook_dir }}/../templates/kanidm/docker-compose.yaml.j2"
+    _server_template: "{{ playbook_dir }}/../templates/kanidm/server.toml.j2"
+    _env_template_dir: "{{ playbook_dir }}/../templates/kanidm"
+    _env_template_glob: "{{ _env_template_dir }}/*.env.j2"
 
   tasks:
     # -------------------------------------------------------------------------
@@ -86,12 +87,17 @@
           Expected: {{ _server_template }}
       when: not _server_template_stat.stat.exists
 
-    - name: Check whether kanidm env template exists on controller
+    - name: Check whether kanidm env template directory exists on controller
       ansible.builtin.stat:
-        path: "{{ _env_template }}"
+        path: "{{ _env_template_dir }}"
       delegate_to: localhost
       become: false
-      register: _env_template_stat
+      register: _env_template_dir_stat
+
+    - name: Discover kanidm env templates on controller
+      ansible.builtin.set_fact:
+        _env_templates: "{{ query('fileglob', _env_template_glob) | sort }}"
+      when: _env_template_dir_stat.stat.exists and _env_template_dir_stat.stat.isdir
 
     # -------------------------------------------------------------------------
     # Kanidm client tools (APT repo + package install)
@@ -155,6 +161,15 @@
         group: ansible
         mode: "0750"
 
+    - name: Ensure Kanidm env directory exists
+      ansible.builtin.file:
+        path: "{{ compose_deploy_dir }}/env"
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0750"
+      when: _env_template_dir_stat.stat.exists and _env_template_dir_stat.stat.isdir
+
     # -------------------------------------------------------------------------
     # Deploy Kanidm files
     # -------------------------------------------------------------------------
@@ -176,15 +191,16 @@
         mode: "0640"
       register: _server_file
 
-    - name: Deploy kanidm .env file
+    - name: Deploy kanidm env files
       ansible.builtin.template:
-        src: "{{ _env_template }}"
-        dest: "{{ compose_deploy_dir }}/.env"
+        src: "{{ item }}"
+        dest: "{{ compose_deploy_dir }}/env/{{ item | basename | regex_replace('\\.j2$', '') }}"
         owner: ansible
         group: ansible
         mode: "0600"
-      when: _env_template_stat.stat.exists
-      register: _env_file
+      loop: "{{ _env_templates | default([]) }}"
+      when: _env_template_dir_stat.stat.exists and _env_template_dir_stat.stat.isdir
+      register: _env_files
 
     # -------------------------------------------------------------------------
     # Generate Kanidm TLS certificate when missing

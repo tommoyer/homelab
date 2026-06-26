@@ -14,4 +14,8 @@ kanidm group add-members grafana_admins tmoyer
 
 kanidm system oauth2 warning-insecure-client-disable-pkce grafana
 
+kanidm system oauth2 update-claim-map-join grafana grafana_role array
+kanidm system oauth2 update-claim-map grafana grafana_role grafana_admins Editor
+kanidm system oauth2 update-claim-map grafana grafana_role grafana_users Viewer
+
 kanidm system oauth2 show-basic-secret grafana

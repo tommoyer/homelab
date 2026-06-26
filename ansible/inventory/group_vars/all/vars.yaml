@@ -2,11 +2,6 @@
 # Global variables for all hosts
 ansible_python_interpreter: /usr/bin/python3
 
-# Authentik configuration
-# authentik_url: "https://authentik.yourdomain.com"
-# authentik_ldap_uri: "ldap://authentik.yourdomain.com:389"
-# authentik_ldap_base_dn: "dc=ldap,dc=goauthentik,dc=io"
-
 # Network defaults
 dns_servers:
   - 192.168.100.2
@@ -14,7 +9,18 @@ dns_servers:
 # Service defaults
 service_restart_policy: unless-stopped
 
-oxidized_username: oxidized
+# Shared email settings used by multiple services
+email_host: "smtp-relay.mgmt.moyer.wtf"
+email_port: "25"
+email_username: ""
+email_password: ""
+email_use_tls: false
+email_use_ssl: false
+email_timeout: ""
+email_host_user: ""
+email_host_password: ""
+email_ssl_certfile: ""
+email_ssl_keyfile: ""
 
 # -----------------------------------------------------------------------------
 # Proxmox API

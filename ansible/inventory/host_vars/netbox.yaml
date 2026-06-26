@@ -1,0 +1,92 @@
+# REQUIRED for production. Template default: 'netbox' (optional fallback).
+db_name: "netbox"
+# REQUIRED. Template default: '' (empty).
+db_user: "netbox"
+# REQUIRED secret. Template default: '' (empty).
+db_password: "{{ netbox_db_password }}"
+# REQUIRED unless local DB in same container/network. Template default: 'localhost'.
+db_host: "postgres"
+
+# REQUIRED unless local Redis in same container/network. Template default: 'localhost'.
+redis_host: "redis"
+
+# REQUIRED for real deployments. Template default: '*'.
+allowed_hosts: "*"
+# REQUIRED secret for stable sessions/crypto. Template default: generated random string.
+secret_key: "{{ netbox_secret_key }}"
+# Optional. Template default: 'UTC'.
+time_zone: "America/New_York"
+
+# NetBox-specific configuration placeholders
+# Optional. Template default: '' (driver default).
+db_port: ""
+# Optional. Template default: 'prefer'.
+db_sslmode: "prefer"
+# Optional. Template default: None/empty.
+db_client_ssl_cert: ""
+# Optional. Template default: None/empty.
+db_client_ssl_key: ""
+# Optional. Template default: None/empty.
+db_client_ssl_root_cert: ""
+
+# Optional. Template default: '6379'.
+redis_port: "6379"
+# Optional. Template default: '0'.
+redis_database: "0"
+# REQUIRED if Redis requires auth. Template default: '' (empty).
+redis_password: "{{ netbox_redis_password }}"
+# Optional. Template default: 'false'.
+redis_insecure_skip_tls_verify: false
+# Optional. Template default: 'false'.
+redis_ssl: false
+
+# Optional. Template default: REDIS_HOST.
+redis_cache_host: "{{ redis_host }}"
+# Optional. Template default: '6379'.
+redis_cache_port: "6379"
+# Optional. Template default: '1'.
+redis_cache_database: "1"
+# REQUIRED if Redis cache requires auth. Template default: '' (empty).
+redis_cache_password: "{{ netbox_redis_cache_password }}"
+# Optional. Template default: 'false'.
+redis_cache_insecure_skip_tls_verify: false
+# Optional. Template default: 'false'.
+redis_cache_ssl: false
+# Optional. Template default: None/empty.
+redis_cache_ssl_cert: ""
+# Optional. Template default: None/empty.
+redis_cache_ssl_key: ""
+# Optional. Template default: None/empty.
+redis_cache_ssl_root_cert: ""
+
+# Optional. Template default: 'False'.
+debug: false
+# Optional. Template default: 'True'.
+login_required: true
+# Optional. Template default: '1209600'.
+login_timeout: "1209600"
+# Optional. Template default: None/empty.
+logout_redirect_url: ""
+# Optional. Template default: '/opt/netbox/netbox/media'.
+media_root: "/opt/netbox/netbox/media"
+# Optional. Template default: 'False'.
+metrics_enabled: false
+# Optional. Template default: None/empty.
+netbox_configuration: ""
+
+# Optional. Template default: 'INFO'.
+log_level: "INFO"
+# Optional. Template default: None/empty.
+logging_remote_lib: ""
+
+# Optional. Template default: None/empty.
+http_proxy: ""
+# Optional. Template default: None/empty.
+https_proxy: ""
+
+# Optional. Template default: 'False'.
+cors_origin_allow_all: false
+# Optional. Template default: '' (empty).
+cors_origin_whitelist: ""
+# Optional. Template default: '' (empty).
+cors_origin_regex_whitelist: ""

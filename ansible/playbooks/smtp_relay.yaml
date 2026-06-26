@@ -76,7 +76,7 @@
     # -------------------------------------------------------------------------
     - name: Deploy /etc/postfix/main.cf
       ansible.builtin.template:
-        src: "{{ playbook_dir }}/../templates/postfix-main.cf.j2"
+        src: "{{ playbook_dir }}/../templates/postfix/postfix-main.cf.j2"
         dest: /etc/postfix/main.cf
         owner: root
         group: root
@@ -89,7 +89,7 @@
     # -------------------------------------------------------------------------
     - name: Deploy /etc/postfix/sasl_passwd
       ansible.builtin.template:
-        src: "{{ playbook_dir }}/../templates/postfix-sasl_passwd.j2"
+        src: "{{ playbook_dir }}/../templates/postfix/postfix-sasl_passwd.j2"
         dest: /etc/postfix/sasl_passwd
         owner: root
         group: root
@@ -119,7 +119,7 @@
     # -------------------------------------------------------------------------
     - name: Deploy /etc/postfix/generic
       ansible.builtin.template:
-        src: "{{ playbook_dir }}/../templates/postfix-generic.j2"
+        src: "{{ playbook_dir }}/../templates/postfix/postfix-generic.j2"
         dest: /etc/postfix/generic
         owner: root
         group: root

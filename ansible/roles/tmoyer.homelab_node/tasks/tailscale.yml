@@ -1,0 +1,35 @@
+---
+# Configure LXC container on PVE node before installing Tailscale.
+# This must run first so that /dev/net/tun is available inside the container.
+- name: Configure LXC container for Tailscale on PVE node
+  when: inventory_hostname in groups['proxmox_all_lxc']
+  block:
+    - name: Enable /dev/net/tun device in LXC container
+      ansible.builtin.command: >-
+        pct set {{ proxmox_vmid }} --dev0 /dev/net/tun
+      delegate_to: "{{ proxmox_node }}"
+      changed_when: true
+
+    - name: Enable keyctl and nesting features in LXC container
+      ansible.builtin.command: >-
+        pct set {{ proxmox_vmid }} --features keyctl=1,nesting=1
+      delegate_to: "{{ proxmox_node }}"
+      changed_when: true
+
+- name: Validate Tailscale auth input
+  ansible.builtin.assert:
+    that:
+      - homelab_node_tailscale_up_skip | bool or (homelab_node_tailscale_authkey | length > 0)
+    fail_msg: >-
+      Set homelab_node_tailscale_authkey (or tailscale_authkey) when
+      homelab_node_tailscale_up_skip is false.
+
+- name: Install/configure Tailscale via collection role
+  ansible.builtin.include_role:
+    name: artis3n.tailscale.machine
+  vars:
+    state: "{{ homelab_node_tailscale_state }}"
+    tailscale_up_skip: "{{ homelab_node_tailscale_up_skip }}"
+    tailscale_authkey: "{{ homelab_node_tailscale_authkey }}"
+    tailscale_args: "{{ homelab_node_tailscale_args }}"
+    tailscale_tags: "{{ homelab_node_tailscale_tags }}"
