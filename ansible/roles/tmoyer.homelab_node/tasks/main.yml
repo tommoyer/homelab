@@ -1,0 +1,35 @@
+---
+- name: Bootstrap host
+  ansible.builtin.include_tasks:
+    file: bootstrap.yml
+    apply:
+      remote_user: "{{ homelab_node_bootstrap_remote_user }}"
+  when: homelab_node_bootstrap_enabled | bool
+
+- name: Reset SSH connection after bootstrap user switch
+  ansible.builtin.meta: reset_connection
+  when:
+    - homelab_node_bootstrap_enabled | bool
+    - homelab_node_reset_connection_after_bootstrap | bool
+
+- name: Configure apt-cacher-ng client
+  ansible.builtin.include_tasks: apt_cacher_ng.yml
+  when: homelab_node_apt_cacher_ng_enabled | bool
+
+- name: Apply system hardening
+  ansible.builtin.include_tasks: hardening.yml
+  when: homelab_node_hardening_enabled | bool
+
+- name: Configure Kanidm client
+  ansible.builtin.include_tasks: kanidm.yml
+  when: homelab_node_kanidm_enabled | bool
+
+- name: Install node_exporter
+  ansible.builtin.include_tasks: node_exporter.yml
+  when: homelab_node_node_exporter_enabled | bool
+
+- name: Install Tailscale
+  ansible.builtin.include_tasks: tailscale.yml
+  when:
+    - inventory_hostname in groups.get('tailscale', [])
+    - homelab_node_tailscale_enabled | bool

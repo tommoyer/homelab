@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  role_name: homelab_node
+  author: tmoyer
+  description: >
+    Composite role for bootstrapping and configuring homelab nodes.
+    Covers initial bootstrap, apt-cacher-ng client, system hardening,
+    Kanidm authentication, and Prometheus node_exporter installation.
+  min_ansible_version: "2.14"
+
+dependencies: []

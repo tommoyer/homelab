@@ -1,0 +1,7 @@
+plugin: community.proxmox.proxmox
+url: https://proxmox.priv.moyer.wtf
+user: "tofu-prov@pve"
+password: ""
+token_id: "iac"
+token_secret: "{{ lookup('env', 'PROXMOX_TOKEN_SECRET') }}"
+validate_certs: true

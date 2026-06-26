@@ -15,8 +15,18 @@
 #                       Defaults to inventory_hostname.
 #   compose_base_dir    Parent directory for all services. Default: /home/ansible
 #
+
+- hosts: netbox
+  roles:
+    - role: tmoyer.homelab_node
+    - role: geerlingguy.docker
+      docker_users:
+        - ansible
+        - tmoyer
+
+
 - name: Deploy Docker Compose service
-  hosts: "{{ target_hosts | default('servicess') }}"
+  hosts: netbox
   gather_facts: yes
   become: yes
 
@@ -25,7 +35,7 @@
     compose_base_dir: /home/ansible
     compose_deploy_dir: "{{ compose_base_dir }}/{{ service_name }}"
     _compose_template: "{{ playbook_dir }}/../files/{{ inventory_hostname }}/docker-compose.yaml"
-    _env_template_dir: "{{ playbook_dir }}/../templates/services"
+    _env_template_dir: "{{ playbook_dir }}/../templates/netbox"
     _env_template_glob: "{{ _env_template_dir }}/*.env.j2"
 
   tasks:
@@ -85,6 +95,14 @@
         mode: "0750"
       when: _env_template_dir_stat.stat.exists and _env_template_dir_stat.stat.isdir
 
+    - name: Ensure configuration directory exists
+      ansible.builtin.file:
+        path: "{{ compose_deploy_dir }}/configuration"
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0755"
+
     # -------------------------------------------------------------------------
     # Deploy compose file and optional env files
     # -------------------------------------------------------------------------
@@ -107,6 +125,14 @@
       loop: "{{ _env_templates | default([]) }}"
       when: _env_template_dir_stat.stat.exists and _env_template_dir_stat.stat.isdir
       register: _env_files
+
+    - name: Deploy configuration files
+      ansible.builtin.copy:
+        src: ../files/netbox/configuration.py
+        dest: "{{ compose_deploy_dir }}/configuration/configuration.py"
+        owner: ansible
+        group: ansible
+        mode: "0644"
 
     # -------------------------------------------------------------------------
     # Pull images and (re)start services

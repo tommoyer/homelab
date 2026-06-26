@@ -234,7 +234,7 @@
 
     - name: Install ollama systemd unit
       ansible.builtin.template:
-        src: "{{ playbook_dir }}/../templates/ollama.service.j2"
+        src: "{{ playbook_dir }}/../templates/ollama/ollama.service.j2"
         dest: /etc/systemd/system/ollama.service
         owner: root
         group: root

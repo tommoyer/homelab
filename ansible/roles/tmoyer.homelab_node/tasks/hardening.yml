@@ -1,0 +1,64 @@
+---
+- name: Update and upgrade all packages
+  ansible.builtin.apt:
+    upgrade: dist
+    update_cache: yes
+    cache_valid_time: 3600
+    autoremove: yes
+    autoclean: yes
+  when: ansible_os_family == "Debian"
+
+- name: Remove conflicting LDAP PAM/NSS packages
+  ansible.builtin.apt:
+    name:
+      - libpam-ldap
+      - libnss-ldap
+      - nscd
+      - sssd
+      - sssd-ldap
+    state: absent
+    purge: yes
+
+- name: Install security packages
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - fail2ban
+      - ufw
+    state: present
+
+- name: Add SSH key to root authorized_keys
+  ansible.posix.authorized_key:
+    user: root
+    state: present
+    key: "{{ lookup('file', hardening_root_ssh_pubkey_path) }}"
+    manage_dir: true
+    exclusive: false
+  when: hardening_manage_root_authorized_key | bool
+
+- name: Harden SSH configuration
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+    validate: 'sshd -t -f %s'
+  loop:
+    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin {{ ssh_permit_root_login }}' }
+    - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication {{ ssh_pubkey_authentication }}' }
+    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication {{ ssh_password_authentication }}' }
+    - { regexp: '^#?ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication {{ ssh_challenge_response_authentication }}' }
+    - { regexp: '^#?KbdInteractiveAuthentication', line: 'KbdInteractiveAuthentication {{ ssh_kbd_interactive_authentication }}' }
+    - { regexp: '^#?UsePAM', line: 'UsePAM {{ ssh_use_pam }}' }
+    - { regexp: '^#?PermitEmptyPasswords', line: 'PermitEmptyPasswords no' }
+    - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+    - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+    - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+  notify: Restart sshd
+
+- name: Start and enable fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    state: started
+    enabled: yes

@@ -3,7 +3,7 @@
 #
 # For each targeted host this playbook expects:
 #   templates/<hostname>-docker-compose.yaml   (required, Jinja2)
-#   templates/<hostname>.env.j2                (optional, Jinja2 – skipped if absent)
+#   templates/<hostname>/*.env.j2              (optional, Jinja2 – skipped if absent)
 #
 # Usage:
 #   ansible-playbook playbooks/docker-compose.yaml
@@ -25,7 +25,8 @@
     compose_base_dir: /home/ansible
     compose_deploy_dir: "{{ compose_base_dir }}/{{ service_name }}"
     _compose_file_src: "{{ playbook_dir }}/../files/uptime-kuma/docker-compose.yaml"
-    _env_template: "{{ playbook_dir }}/../templates/{{ inventory_hostname }}.env.j2"
+    _env_template_dir: "{{ playbook_dir }}/../templates/uptime-kuma"
+    _env_template_glob: "{{ _env_template_dir }}/*.env.j2"
 
   tasks:
     # -------------------------------------------------------------------------
@@ -85,12 +86,17 @@
     # -------------------------------------------------------------------------
     # Pre-flight checks (run on controller, not on the remote host)
     # -------------------------------------------------------------------------
-    - name: Check whether .env template exists on controller
+    - name: Check whether env template directory exists on controller
       ansible.builtin.stat:
-        path: "{{ _env_template }}"
+        path: "{{ _env_template_dir }}"
       delegate_to: localhost
       become: false
-      register: _env_template_stat
+      register: _env_template_dir_stat
+
+    - name: Discover env templates on controller
+      ansible.builtin.set_fact:
+        _env_templates: "{{ query('fileglob', _env_template_glob) | sort }}"
+      when: _env_template_dir_stat.stat.exists and _env_template_dir_stat.stat.isdir
 
     # -------------------------------------------------------------------------
     # Directory layout
@@ -103,8 +109,17 @@
         group: ansible
         mode: "0750"
 
+    - name: Ensure env directory exists
+      ansible.builtin.file:
+        path: "{{ compose_deploy_dir }}/env"
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0750"
+      when: _env_template_dir_stat.stat.exists and _env_template_dir_stat.stat.isdir
+
     # -------------------------------------------------------------------------
-    # Deploy compose file and optional .env
+    # Deploy compose file and optional env files
     # -------------------------------------------------------------------------
     - name: Deploy docker-compose.yaml
       ansible.builtin.copy:
@@ -115,15 +130,16 @@
         mode: "0640"
       register: _compose_deployed
 
-    - name: Deploy .env file
+    - name: Deploy env files
       ansible.builtin.template:
-        src: "{{ _env_template }}"
-        dest: "{{ compose_deploy_dir }}/.env"
+        src: "{{ item }}"
+        dest: "{{ compose_deploy_dir }}/env/{{ item | basename | regex_replace('\\.j2$', '') }}"
         owner: ansible
         group: ansible
         mode: "0600"
-      when: _env_template_stat.stat.exists
-      register: _env_file
+      loop: "{{ _env_templates | default([]) }}"
+      when: _env_template_dir_stat.stat.exists and _env_template_dir_stat.stat.isdir
+      register: _env_files
 
     # -------------------------------------------------------------------------
     # Pull images and (re)start services
