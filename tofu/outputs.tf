@@ -1,12 +1,12 @@
-output "netbox_name" {
-  value = module.netbox.container_name
+output "phpipam_name" {
+  value = module.phpipam.container_name
 }
 
-output "netbox_ipv4_cidr" {
-  value = module.netbox.container_ipv4_cidr
+output "phpipam_ipv4_cidr" {
+  value = module.phpipam.container_ipv4_cidr
 }
 
-output "netbox_password" {
-  value     = module.netbox.container_password
+output "phpipam_password" {
+  value     = module.phpipam.container_password
   sensitive = true
 }

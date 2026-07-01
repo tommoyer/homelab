@@ -1,0 +1,6 @@
+@{{ handler_label }} host {{ fqdn }}
+handle @{{ handler_label }} {
+	reverse_proxy http://{{ backend }} {
+		header_up X-Forwarded-Proto https
+	}
+}
