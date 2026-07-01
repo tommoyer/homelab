@@ -74,3 +74,11 @@ kanidm_ppa_list_url: "https://kanidm.github.io/kanidm_ppa/kanidm_ppa.list"
 kanidm_service_account_enabled: false
 kanidm_service_account_token: ""
 kanidm_service_account_token_path: "/etc/kanidm/unixd_token"
+
+# --- homelab_node role feature flags ---
+homelab_node_bootstrap_enabled: false  # Enable per-host only when bootstrapping new nodes
+homelab_node_apt_cacher_ng_enabled: true
+homelab_node_hardening_enabled: true
+homelab_node_kanidm_enabled: true
+homelab_node_node_exporter_enabled: true
+homelab_node_tailscale_enabled: true

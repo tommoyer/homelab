@@ -1,8 +1,8 @@
-module "netbox" {
+module "phpipam" {
   source = "./modules/proxmox-lxc"
 
   node_name        = var.default_node_name
-  hostname         = "netbox"
+  hostname         = "phpipam"
   template_file_id = var.default_template_file_id
   datastore_id     = var.default_datastore_id
   bridge           = var.default_bridge

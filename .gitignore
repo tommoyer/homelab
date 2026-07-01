@@ -38,3 +38,8 @@ external_records.json
 *.tfstate
 *.tfstate.backup
 .terraform/
+
+ansible/roles/andrewrothstein.ollama/
+ansible/roles/andrewrothstein.unarchivedeps/
+ansible/roles/geerlingguy.docker/
+ansible/collections/

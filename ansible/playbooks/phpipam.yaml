@@ -16,7 +16,7 @@
 #   compose_base_dir    Parent directory for all services. Default: /home/ansible
 #
 
-- hosts: netbox
+- hosts: phpipam
   roles:
     - role: tmoyer.homelab_node
     - role: geerlingguy.docker
@@ -26,7 +26,7 @@
 
 
 - name: Deploy Docker Compose service
-  hosts: netbox
+  hosts: phpipam
   gather_facts: yes
   become: yes
 
@@ -35,7 +35,7 @@
     compose_base_dir: /home/ansible
     compose_deploy_dir: "{{ compose_base_dir }}/{{ service_name }}"
     _compose_template: "{{ playbook_dir }}/../files/{{ inventory_hostname }}/docker-compose.yaml"
-    _env_template_dir: "{{ playbook_dir }}/../templates/netbox"
+    _env_template_dir: "{{ playbook_dir }}/../templates/phpipam"
     _env_template_glob: "{{ _env_template_dir }}/*.env.j2"
 
   tasks:
@@ -125,14 +125,6 @@
       loop: "{{ _env_templates | default([]) }}"
       when: _env_template_dir_stat.stat.exists and _env_template_dir_stat.stat.isdir
       register: _env_files
-
-    - name: Deploy configuration files
-      ansible.builtin.copy:
-        src: ../files/netbox/configuration.py
-        dest: "{{ compose_deploy_dir }}/configuration/configuration.py"
-        owner: ansible
-        group: ansible
-        mode: "0644"
 
     # -------------------------------------------------------------------------
     # Pull images and (re)start services
