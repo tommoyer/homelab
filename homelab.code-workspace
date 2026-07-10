@@ -4,5 +4,7 @@
 			"path": "."
 		}
 	],
-	"settings": {}
+	"settings": {
+		"ollama.endpoint": "http://ollama.homelab.moyer.wtf:11434"
+	}
 }
