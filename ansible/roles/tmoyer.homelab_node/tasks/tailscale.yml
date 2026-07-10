@@ -1,28 +1,93 @@
 ---
+- name: Initialize Tailscale joined status
+  ansible.builtin.set_fact:
+    homelab_node_tailscale_already_joined: false
+
+- name: Check current Tailscale status
+  ansible.builtin.command: tailscale status --json
+  register: homelab_node_tailscale_status
+  changed_when: false
+  failed_when: false
+
+- name: Mark node as already joined to Tailscale
+  ansible.builtin.set_fact:
+    homelab_node_tailscale_already_joined: >-
+      {{
+        (((homelab_node_tailscale_status.stdout | from_json).BackendState | default('')) == 'Running')
+        and ((((homelab_node_tailscale_status.stdout | from_json).Self | default({})).TailscaleIPs | default([]) | length) > 0)
+      }}
+  when:
+    - homelab_node_tailscale_status.rc == 0
+    - homelab_node_tailscale_status.stdout | length > 0
+
 # Configure LXC container on PVE node before installing Tailscale.
 # This must run first so that /dev/net/tun is available inside the container.
 - name: Configure LXC container for Tailscale on PVE node
-  when: inventory_hostname in groups['proxmox_all_lxc']
+  vars:
+    homelab_node_proxmox_delegate_host: "{{ (proxmox_guest_node_map | default({})).get(inventory_hostname, '') }}"
+    homelab_node_proxmox_delegate_vmid: "{{ (proxmox_guest_vmid_map | default({})).get(inventory_hostname, '') }}"
+  when:
+    - (proxmox_guest_type_map | default({})).get(inventory_hostname) == 'lxc'
+    - not (homelab_node_tailscale_already_joined | bool)
   block:
+    - name: Validate Proxmox LXC metadata
+      ansible.builtin.assert:
+        that:
+          - homelab_node_proxmox_delegate_host | string | length > 0
+          - homelab_node_proxmox_delegate_vmid | string | length > 0
+        fail_msg: >-
+          Missing Proxmox metadata for LXC host {{ inventory_hostname }}.
+          Ensure proxmox_guest_node_map and proxmox_guest_vmid_map
+          contain this host.
+
     - name: Enable /dev/net/tun device in LXC container
       ansible.builtin.command: >-
-        pct set {{ proxmox_vmid }} --dev0 /dev/net/tun
-      delegate_to: "{{ proxmox_node }}"
+        pct set {{ homelab_node_proxmox_delegate_vmid }} --dev0 /dev/net/tun
+      delegate_to: "{{ homelab_node_proxmox_delegate_host }}"
       changed_when: true
 
     - name: Enable keyctl and nesting features in LXC container
       ansible.builtin.command: >-
-        pct set {{ proxmox_vmid }} --features keyctl=1,nesting=1
-      delegate_to: "{{ proxmox_node }}"
+        pct set {{ homelab_node_proxmox_delegate_vmid }} --features keyctl=1,nesting=1
+      delegate_to: "{{ homelab_node_proxmox_delegate_host }}"
       changed_when: true
+
+    - name: Reboot LXC container via Proxmox
+      ansible.builtin.command:
+        cmd: "pct reboot {{ homelab_node_proxmox_delegate_vmid }}"
+      become: true
+      delegate_to: "{{ homelab_node_proxmox_delegate_host }}"
+
+    - name: Wait for LXC container to come back
+      ansible.builtin.wait_for:
+        host: "{{ host_ip | default(ansible_host | default(inventory_hostname)) }}"
+        port: "{{ ansible_ssh_port | default(22) }}"
+        timeout: 300
+        delay: 5
+        connect_timeout: 5
+      delegate_to: localhost
+      become: false
 
 - name: Validate Tailscale auth input
   ansible.builtin.assert:
     that:
-      - homelab_node_tailscale_up_skip | bool or (homelab_node_tailscale_authkey | length > 0)
+      - homelab_node_tailscale_already_joined | bool or homelab_node_tailscale_up_skip | bool or (homelab_node_tailscale_authkey | length > 0)
     fail_msg: >-
       Set homelab_node_tailscale_authkey (or tailscale_authkey) when
-      homelab_node_tailscale_up_skip is false.
+      homelab_node_tailscale_up_skip is false and the node is not already joined.
+
+- name: Skip Tailscale role when node is already joined
+  ansible.builtin.debug:
+    msg: "Skipping Tailscale install/config because node is already joined."
+  when: homelab_node_tailscale_already_joined | bool
+
+- name: Add extra hosts entries to /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "{{ item }}"
+    state: present
+    insertbefore: BOF
+  loop: "{{ homelab_node_tailscale_extra_hosts | default([]) }}"
 
 - name: Install/configure Tailscale via collection role
   ansible.builtin.include_role:
@@ -33,3 +98,4 @@
     tailscale_authkey: "{{ homelab_node_tailscale_authkey }}"
     tailscale_args: "{{ homelab_node_tailscale_args }}"
     tailscale_tags: "{{ homelab_node_tailscale_tags }}"
+  when: not (homelab_node_tailscale_already_joined | bool)

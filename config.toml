@@ -36,10 +36,6 @@ tailscale_subnet_router = "192.168.20.4"
 # Public WAN IPv4 used for internet-facing DNS records.
 public_ip = "207.144.81.217"
 
-# Default MikroTik RouterOS connection target
-mikrotik_host = "192.168.10.1"
-mikrotik_user = "admin"
-
 # Example overrides (optional):
 # mikrotik_password_env = "MIKROTIK_PASSWORD"  # legacy alias for password_env
 
@@ -113,10 +109,8 @@ node_password_env = ""
 
 # Proxmox-side helper (method: "Proxmox Helper Script")
 # `proxmox_user` and `proxmox_password_env` can also come from [deploy] when unset.
-proxmox_user = "root@pam"
 proxmox_port = 22
 proxmox_identity_file = ""
-proxmox_password_env = "PROXMOX_PASSWORD"
 proxmox_helper_script_url = "https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/tools/addon/add-tailscale-lxc.sh"
 
 [pihole]
@@ -167,9 +161,6 @@ use_sudo = false
 # Optional explicit zone list. If omitted, zones fall back to [caddy].caddy_zones[*].zone.
 # zones = ["moyer.wtf", "thomasmoyer.org"]
 
-# DNS label created in each zone as an A record to public_ip, then used as CNAME target.
-public_target_label = "_public"
-
 # Cloudflare token source for generated creds.json and --apply (dnscontrol push).
 cloudflare_token_env = "CLOUDFLARE_API_TOKEN"
 
@@ -204,12 +195,6 @@ mac_column = "MAC Address"
 wan_ips = ["207.144.81.217"]
 
 clients_subnet = "192.168.100.0/24"
-
-# Interface names (match your RouterOS config).
-dmz_interface = "vlan20-dmz"
-homelab_interface = "vlan30-homelab"
-hivemind_interface = "vlan100-clients"
-managment_interface = "vlan10-mgmt"
 
 # Default output base path used by prompt mode.
 output = "./generated/mikrotik"
@@ -249,8 +234,6 @@ output = "./generated/caddy/Caddyfile"
 work_dir = "./generated/caddy/downloads"
 # dump_json = false
 
-caddy_host = "caddy"
-
 # Zones
 caddy_zones = [
   { zone = "moyer.wtf", wildcard = true, redirect_www = false },
@@ -280,4 +263,4 @@ proxmox_host = "proxmox.moyer.wtf"
 proxmox_user = "root@pam"
 proxmox_password_env = "PROXMOX_PASSWORD"
 render_dir = "./generated/pve-scripts"
-templates_dir = "./templates/pve-scripts"
+

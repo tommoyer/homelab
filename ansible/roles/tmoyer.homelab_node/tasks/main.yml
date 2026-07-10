@@ -7,7 +7,7 @@
   when: homelab_node_bootstrap_enabled | bool
 
 - name: Reset SSH connection after bootstrap user switch
-  ansible.builtin.meta: reset_connection
+  ansible.builtin.include_tasks: reset_connection.yml
   when:
     - homelab_node_bootstrap_enabled | bool
     - homelab_node_reset_connection_after_bootstrap | bool
@@ -31,5 +31,4 @@
 - name: Install Tailscale
   ansible.builtin.include_tasks: tailscale.yml
   when:
-    - inventory_hostname in groups.get('tailscale', [])
     - homelab_node_tailscale_enabled | bool

@@ -1,0 +1,25 @@
+[Unit]
+Description=Webhook listener for Glance config deploys
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ glance_deploy_user }}
+Group={{ glance_deploy_group }}
+ExecStart=/usr/bin/webhook \
+  -hooks {{ glance_webhook_hooks_file }} \
+  -hotreload \
+  -verbose \
+  -port {{ glance_webhook_port }}
+Restart=on-failure
+RestartSec=5
+WorkingDirectory={{ glance_webhook_workdir }}
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ glance_config_repo_path }} {{ glance_live_config_path }} /run
+
+[Install]
+WantedBy=multi-user.target
