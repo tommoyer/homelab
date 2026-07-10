@@ -1,7 +1,7 @@
 ---
 # Feature flags — set these to true to enable each component
 homelab_node_bootstrap_enabled: false
-homelab_node_apt_cacher_ng_enabled: false
+homelab_node_apt_cacher_ng_enabled: true
 homelab_node_hardening_enabled: true
 homelab_node_node_exporter_enabled: true
 homelab_node_tailscale_enabled: true
@@ -39,9 +39,10 @@ node_exporter_download_url: >-
 # --- Tailscale ---
 homelab_node_tailscale_state: latest
 homelab_node_tailscale_up_skip: true
-homelab_node_tailscale_authkey: ""
-homelab_node_tailscale_args: ""
-homelab_node_tailscale_tags: []
+homelab_node_tailscale_args: "--accept-dns=false --accept-routes=false"
+homelab_node_tailscale_tags:
+  - "ansible"
+homelab_node_tailscale_extra_hosts: []
 
 # --- Kanidm Client ---
 kanidm_packages:

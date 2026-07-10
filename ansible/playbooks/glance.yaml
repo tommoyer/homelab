@@ -1,0 +1,351 @@
+---
+# Deploy a Docker Compose service to hosts with the "docker" role.
+#
+# For each targeted host this playbook expects:
+#   templates/<hostname>-docker-compose.yaml   (required, Jinja2)
+#   templates/<hostname>/*.env.j2              (optional, Jinja2 – skipped if absent)
+#
+# Usage:
+#   ansible-playbook playbooks/docker-compose.yaml
+#   ansible-playbook playbooks/docker-compose.yaml --limit myhost
+#   ansible-playbook playbooks/docker-compose.yaml -e service_name=myapp
+#
+# Variables:
+#   service_name        Name of the service directory under compose_base_dir.
+#                       Defaults to inventory_hostname.
+#   compose_base_dir    Parent directory for all services. Default: /home/ansible
+#
+
+- hosts: glance
+  roles:
+    - role: tmoyer.homelab_node
+    - role: geerlingguy.docker
+      docker_users:
+        - ansible
+        - tmoyer
+
+- name: Deploy Docker Compose service
+  hosts: glance
+  gather_facts: yes
+  become: yes
+
+  vars:
+    service_name: "{{ inventory_hostname }}"
+    compose_base_dir: /home/ansible
+    kanidm_ip: "{{ lookup('pipe', 'getent hosts ' ~ kanidm_hostname) | split | first }}"
+    compose_deploy_dir: "{{ compose_base_dir }}/{{ service_name }}"
+    _compose_template_j2: "{{ playbook_dir }}/../templates/{{ service_name }}/docker-compose.yaml.j2"
+    _compose_template_plain: "{{ playbook_dir }}/../files/{{ service_name }}/docker-compose.yaml"
+    _env_template_dir: "{{ playbook_dir }}/../templates/{{ service_name }}"
+    _env_template_glob: "{{ _env_template_dir }}/*.env.j2"
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # Pre-flight checks (run on controller, not on the remote host)
+    # -------------------------------------------------------------------------
+    - name: Check whether Jinja2 compose template exists on controller
+      ansible.builtin.stat:
+        path: "{{ _compose_template_j2 }}"
+      delegate_to: localhost
+      become: false
+      register: _compose_template_j2_stat
+
+    - name: Check whether plain compose file exists on controller
+      ansible.builtin.stat:
+        path: "{{ _compose_template_plain }}"
+      delegate_to: localhost
+      become: false
+      register: _compose_template_plain_stat
+
+    - name: Fail when no compose template found for host
+      ansible.builtin.fail:
+        msg: >-
+          No compose template found for host '{{ inventory_hostname }}'.
+          Checked: {{ _compose_template_j2 }} and {{ _compose_template_plain }}
+      when: not _compose_template_j2_stat.stat.exists and not _compose_template_plain_stat.stat.exists
+
+    - name: Set compose template path
+      ansible.builtin.set_fact:
+        _compose_template: >-
+          {{ _compose_template_j2 if _compose_template_j2_stat.stat.exists else _compose_template_plain }}
+
+    - name: Check whether env template directory exists on controller
+      ansible.builtin.stat:
+        path: "{{ _env_template_dir }}"
+      delegate_to: localhost
+      become: false
+      register: _env_template_dir_stat
+
+    - name: Discover env templates on controller
+      ansible.builtin.set_fact:
+        _env_templates: "{{ query('fileglob', _env_template_glob) | sort }}"
+      when: _env_template_dir_stat.stat.exists and _env_template_dir_stat.stat.isdir
+
+    # -------------------------------------------------------------------------
+    # Directory layout
+    # -------------------------------------------------------------------------
+    - name: Ensure service directory exists
+      ansible.builtin.file:
+        path: "{{ compose_deploy_dir }}"
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0770"
+
+    - name: Ensure env directory exists
+      ansible.builtin.file:
+        path: "{{ compose_deploy_dir }}/env"
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0770"
+      when: _env_template_dir_stat.stat.exists and _env_template_dir_stat.stat.isdir
+
+    # -------------------------------------------------------------------------
+    # Deploy compose file and optional env files
+    # -------------------------------------------------------------------------
+    - name: Deploy docker-compose.yaml
+      ansible.builtin.template:
+        src: "{{ _compose_template }}"
+        dest: "{{ compose_deploy_dir }}/docker-compose.yaml"
+        owner: ansible
+        group: ansible
+        mode: "0660"
+      register: _compose_file
+
+    - name: Deploy env files
+      ansible.builtin.template:
+        src: "{{ item }}"
+        dest: "{{ compose_deploy_dir }}/env/{{ item | basename | regex_replace('\\.j2$', '') }}"
+        owner: ansible
+        group: ansible
+        mode: "0660"
+      loop: "{{ _env_templates | default([]) }}"
+      when: _env_template_dir_stat.stat.exists and _env_template_dir_stat.stat.isdir
+      register: _env_files
+
+    - name: Ensure ansible group has rwx permissions on /home/ansible (recursive)
+      ansible.builtin.file:
+        path: "/home/ansible"
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0770"
+        recurse: true
+
+    # -------------------------------------------------------------------------
+    # Pull images and (re)start services
+    # -------------------------------------------------------------------------
+
+    - name: Log in to Gitea Container Registry
+      community.docker.docker_login:
+        registry_url: "https://gitea.priv.moyer.wtf"
+        username: "ansible"
+        password: "{{ ansible_gitea_pat }}"
+        reauthorize: yes
+
+    - name: Pull Docker images
+      ansible.builtin.command:
+        cmd: docker compose pull
+        chdir: "{{ compose_deploy_dir }}"
+      register: _compose_pull
+      changed_when: "'Pulled' in _compose_pull.stdout"
+
+    - name: Start services (docker compose up -d)
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ compose_deploy_dir }}"
+      register: _compose_up
+      changed_when: >-
+        'Started' in _compose_up.stdout or
+        'Created' in _compose_up.stdout or
+        'Recreated' in _compose_up.stdout
+
+    # -------------------------------------------------------------------------
+    # Setup webhook listener for Glance configuration updates
+    # -------------------------------------------------------------------------
+
+- name: Deploy Glance webhook listener pieces
+  hosts: glance
+  become: true
+  vars:
+    glance_webhook_packages:
+      - git
+      - rsync
+      - webhook
+  tasks:
+    - name: Install prerequisite packages
+      ansible.builtin.package:
+        name: "{{ glance_webhook_packages }}"
+        state: present
+      when: glance_webhook_enabled
+
+    - name: Create deploy group
+      ansible.builtin.group:
+        name: "{{ glance_deploy_group }}"
+        system: true
+      when: glance_webhook_enabled
+
+    - name: Create deploy user
+      ansible.builtin.user:
+        name: "{{ glance_deploy_user }}"
+        group: "{{ glance_deploy_group }}"
+        system: true
+        home: "{{ glance_webhook_workdir }}"
+        shell: /usr/sbin/nologin
+        create_home: false
+        groups:
+          - docker
+          - ansible
+        append: true
+      when: glance_webhook_enabled
+
+    - name: Create directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner | default(glance_deploy_user) }}"
+        group: "{{ item.group | default(glance_deploy_group) }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ glance_webhook_workdir }}", mode: "0755" }
+        - { path: "{{ glance_config_repo_path }}", mode: "0755" }
+        - { path: "{{ glance_live_config_path }}", mode: "0755" }
+        - { path: "/etc/webhook", owner: "{{ glance_deploy_user }}", group: "{{ glance_deploy_group }}", mode: "0755" }
+      when: glance_webhook_enabled
+
+    - name: Ensure glance-deploy SSH directory exists
+      ansible.builtin.file:
+        path: /opt/glance-deploy/.ssh
+        state: directory
+        owner: "{{ glance_deploy_user }}"
+        group: "{{ glance_deploy_group }}"
+        mode: "0700"
+
+    - name: Ensure known_hosts file exists
+      ansible.builtin.file:
+        path: /opt/glance-deploy/.ssh/known_hosts
+        state: touch
+        owner: "{{ glance_deploy_user }}"
+        group: "{{ glance_deploy_group }}"
+        mode: "0644"
+
+    - name: Add Gitea host key
+      ansible.builtin.known_hosts:
+        path: /opt/glance-deploy/.ssh/known_hosts
+        name: "{{ glance_gitea_ssh_host }}"
+        key: "{{ glance_gitea_known_host_key }}"
+        state: present
+
+    - name: Ensure glance-deploy SSH private key exists
+      ansible.builtin.copy:
+        content: "{{ glance_gitea_ssh_private_key }}"
+        dest: /opt/glance-deploy/.ssh/id_ed25519
+        owner: "{{ glance_deploy_user }}"
+        group: "{{ glance_deploy_group }}"
+        mode: "0600"
+      when: glance_webhook_enabled
+
+    - name: Ensure glance-deploy SSH public key exists
+      ansible.builtin.copy:
+        content: "{{ glance_gitea_ssh_public_key }}"
+        dest: /opt/glance-deploy/.ssh/id_ed25519.pub
+        owner: "{{ glance_deploy_user }}"
+        group: "{{ glance_deploy_group }}"
+        mode: "0644"
+      when: glance_webhook_enabled
+
+    - name: Initial checkout of Glance config repo
+      ansible.builtin.git:
+        repo: "{{ glance_config_repo_url }}"
+        dest: "{{ glance_config_repo_path }}"
+        version: "{{ glance_config_repo_version }}"
+        key_file: /opt/glance-deploy/.ssh/id_ed25519
+        accept_hostkey: false
+        update: true
+      become: true
+      become_user: "{{ glance_deploy_user }}"
+
+    - name: Ensure live config root exists with shared group access
+      ansible.builtin.file:
+        path: /home/ansible/glance/config
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "2775"
+
+    - name: Find live config directories
+      ansible.builtin.find:
+        paths: /home/ansible/glance/config
+        file_type: directory
+      register: glance_config_dirs
+
+    - name: Set directory permissions on live config tree
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        owner: ansible
+        group: ansible
+        mode: "2775"
+      loop: "{{ glance_config_dirs.files }}"
+
+    - name: Find live config files
+      ansible.builtin.find:
+        paths: /home/ansible/glance/config
+        file_type: file
+      register: glance_config_files
+
+    - name: Set file permissions on live config tree
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        owner: ansible
+        group: ansible
+        mode: "0664"
+      loop: "{{ glance_config_files.files }}"
+
+    - name: Install deploy script
+      ansible.builtin.template:
+        src: ../templates/glance/deploy-glance.sh.j2
+        dest: "{{ glance_webhook_script_path }}"
+        owner: "{{ glance_deploy_user }}"
+        group: "{{ glance_deploy_group }}"
+        mode: "0755"
+      when: glance_webhook_enabled
+
+    - name: Install webhook hook definition
+      ansible.builtin.template:
+        src: ../templates/glance/hooks.json.j2
+        dest: "{{ glance_webhook_hooks_file }}"
+        owner: "{{ glance_deploy_user }}"
+        group: "{{ glance_deploy_group }}"
+        mode: "0755"
+      notify: Restart webhook
+      when: glance_webhook_enabled
+
+    - name: Install webhook systemd unit
+      ansible.builtin.template:
+        src: ../templates/glance/webhook.service.j2
+        dest: /etc/systemd/system/webhook.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Reload systemd
+        - Restart webhook
+      when: glance_webhook_enabled
+
+    - name: Enable and start webhook service
+      ansible.builtin.systemd:
+        name: webhook.service
+        enabled: true
+        state: started
+      when: glance_webhook_enabled
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart webhook
+      ansible.builtin.systemd:
+        name: webhook.service
+        state: restarted

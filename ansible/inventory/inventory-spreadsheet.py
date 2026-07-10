@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import pandas as pd
+import requests
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -43,6 +46,22 @@ def as_str(value: Any) -> str:
     if is_blank(value):
         return ""
     return str(value).strip()
+
+
+def normalize_vmid(value: Any) -> str:
+    if is_blank(value):
+        return ""
+    if isinstance(value, (int, float)):
+        try:
+            return str(int(value))
+        except (TypeError, ValueError):
+            return ""
+    text = as_str(value)
+    if not text:
+        return ""
+    if re.fullmatch(r"\d+\.0+", text):
+        return text.split(".", 1)[0]
+    return text
 
 
 def parse_bool(value: Any, default: bool = False) -> bool:
@@ -110,6 +129,209 @@ def load_effective_inventory_config(config_path: Path) -> dict[str, Any]:
     return effective
 
 
+def _normalize_proxmox_api_base(raw_host: str) -> str:
+    host = as_str(raw_host)
+    if not host:
+        return ""
+    if not host.startswith(("http://", "https://")):
+        host = f"https://{host}"
+    host = host.rstrip("/")
+    if host.endswith("/api2/json"):
+        return host
+    return f"{host}/api2/json"
+
+
+def _resolve_proxmox_api_settings(cfg: dict[str, Any]) -> dict[str, Any]:
+    full_cfg = cfg.get("_full_config", {}) or {}
+    inventory_cfg = full_cfg.get("inventory", {}) or {}
+    deploy_cfg = full_cfg.get("deploy", {}) or {}
+
+    api_host = (
+        as_str(os.getenv("PROXMOX_VE_ENDPOINT"))
+        or as_str(os.getenv("PROXMOX_ENDPOINT"))
+        or as_str(os.getenv("PROXMOX_API_HOST"))
+        or as_str(os.getenv("PROXMOX_HOST"))
+        or as_str(inventory_cfg.get("proxmox_api_host"))
+        or as_str(deploy_cfg.get("proxmox_host"))
+    )
+    api_user = (
+        as_str(os.getenv("PROXMOX_API_USER"))
+        or as_str(os.getenv("PROXMOX_USER"))
+        or as_str(inventory_cfg.get("proxmox_api_user"))
+        or as_str(deploy_cfg.get("proxmox_user"))
+    )
+    token_id = (
+        as_str(os.getenv("PROXMOX_API_TOKEN_ID"))
+        or as_str(os.getenv("PROXMOX_TOKEN_ID"))
+        or as_str(inventory_cfg.get("proxmox_api_token_id"))
+    )
+    token_secret = as_str(os.getenv("PROXMOX_API_TOKEN_SECRET")) or as_str(os.getenv("PROXMOX_TOKEN_SECRET"))
+
+    password = as_str(os.getenv("PROXMOX_API_PASSWORD")) or as_str(os.getenv("PROXMOX_PASSWORD"))
+    password_env_name = as_str(deploy_cfg.get("proxmox_password_env"))
+    if not password and password_env_name:
+        password = as_str(os.getenv(password_env_name))
+
+    verify_certs = True
+    if "PROXMOX_API_VALIDATE_CERTS" in os.environ:
+        verify_certs = parse_bool(os.getenv("PROXMOX_API_VALIDATE_CERTS"), default=True)
+    elif "PROXMOX_VERIFY_SSL" in os.environ:
+        verify_certs = parse_bool(os.getenv("PROXMOX_VERIFY_SSL"), default=True)
+    elif "proxmox_api_validate_certs" in inventory_cfg:
+        verify_certs = parse_bool(inventory_cfg.get("proxmox_api_validate_certs"), default=True)
+
+    auth_header = ""
+    if token_id and token_secret:
+        full_token_id = token_id if "!" in token_id else f"{api_user}!{token_id}"
+        auth_header = f"PVEAPIToken={full_token_id}={token_secret}"
+
+    return {
+        "api_base": _normalize_proxmox_api_base(api_host),
+        "api_user": api_user,
+        "password": password,
+        "auth_header": auth_header,
+        "verify_certs": verify_certs,
+    }
+
+
+def _proxmox_api_get(session: requests.Session, api_base: str, path: str, *, verify_certs: bool) -> dict[str, Any]:
+    url = f"{api_base}{path}"
+    response = session.get(url, timeout=10, verify=verify_certs)
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Unexpected Proxmox response payload type for {path}")
+    return data
+
+
+def _login_proxmox_ticket(
+    session: requests.Session,
+    *,
+    api_base: str,
+    api_user: str,
+    password: str,
+    verify_certs: bool,
+) -> None:
+    if not api_user or not password:
+        raise RuntimeError("Proxmox username/password required for ticket auth")
+
+    login_url = f"{api_base}/access/ticket"
+    response = session.post(
+        login_url,
+        data={"username": api_user, "password": password},
+        timeout=10,
+        verify=verify_certs,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    ticket = as_str(data.get("ticket"))
+    csrf = as_str(data.get("CSRFPreventionToken"))
+    if not ticket:
+        raise RuntimeError("Proxmox login succeeded without a ticket")
+    session.cookies.set("PVEAuthCookie", ticket)
+    if csrf:
+        session.headers["CSRFPreventionToken"] = csrf
+
+
+def discover_proxmox_guest_inventory(cfg: dict[str, Any]) -> dict[str, dict[str, str]]:
+    settings = _resolve_proxmox_api_settings(cfg)
+    api_base = as_str(settings.get("api_base"))
+    verify_certs = bool(settings.get("verify_certs", True))
+
+    if not api_base:
+        print(
+            (
+                "Warning: Proxmox API discovery skipped "
+                "(missing PROXMOX_API_HOST/PROXMOX_HOST or config deploy.proxmox_host)."
+            ),
+            file=sys.stderr,
+        )
+        return {}
+
+    session = requests.Session()
+    auth_header = as_str(settings.get("auth_header"))
+
+    if auth_header:
+        session.headers["Authorization"] = auth_header
+    else:
+        api_user = as_str(settings.get("api_user"))
+        password = as_str(settings.get("password"))
+        if not api_user or not password:
+            print(
+                (
+                    "Warning: Proxmox API discovery skipped "
+                    "(set token envs PROXMOX_API_TOKEN_ID + PROXMOX_API_TOKEN_SECRET, "
+                    "or user/password envs PROXMOX_API_USER + PROXMOX_API_PASSWORD)."
+                ),
+                file=sys.stderr,
+            )
+            return {}
+        try:
+            _login_proxmox_ticket(
+                session,
+                api_base=api_base,
+                api_user=api_user,
+                password=password,
+                verify_certs=verify_certs,
+            )
+        except Exception as exc:
+            print(f"Warning: Proxmox API discovery login failed: {exc}", file=sys.stderr)
+            return {}
+
+    try:
+        nodes_payload = _proxmox_api_get(session, api_base, "/nodes", verify_certs=verify_certs)
+    except Exception as exc:
+        print(f"Warning: Proxmox API discovery failed to list nodes: {exc}", file=sys.stderr)
+        return {}
+
+    node_rows = nodes_payload.get("data", []) if isinstance(nodes_payload, dict) else []
+    node_names = [as_str(row.get("node")) for row in node_rows if isinstance(row, dict)]
+    node_names = [node for node in node_names if node]
+
+    guests_by_name: dict[str, dict[str, str]] = {}
+    for node in node_names:
+        node_q = quote(node, safe="")
+        for vm_type in ("lxc", "qemu"):
+            path = f"/nodes/{node_q}/{vm_type}"
+            try:
+                guest_payload = _proxmox_api_get(session, api_base, path, verify_certs=verify_certs)
+            except Exception as exc:
+                print(f"Warning: Proxmox API discovery failed for {path}: {exc}", file=sys.stderr)
+                continue
+
+            guest_rows = guest_payload.get("data", []) if isinstance(guest_payload, dict) else []
+            for row in guest_rows:
+                if not isinstance(row, dict):
+                    continue
+                name = as_str(row.get("name")) or as_str(row.get("hostname"))
+                vmid = normalize_vmid(row.get("vmid"))
+                if not name or not vmid:
+                    continue
+
+                key = name.lower()
+                guest_meta = {
+                    "name": name,
+                    "node": node,
+                    "vmid": vmid,
+                    "type": vm_type,
+                }
+                if key in guests_by_name and guests_by_name[key] != guest_meta:
+                    # Keep the first match to preserve stable behavior.
+                    print(
+                        (
+                            f"Warning: duplicate Proxmox guest name '{name}' seen on "
+                            "multiple nodes; keeping first match "
+                            f"{guests_by_name[key]['node']}:{guests_by_name[key]['vmid']}"
+                        ),
+                        file=sys.stderr,
+                    )
+                    continue
+                guests_by_name[key] = guest_meta
+
+    return guests_by_name
+
+
 def build_inventory(cfg: dict[str, Any], *, use_tailscale: bool = True) -> dict[str, Any]:
     sheet_url = cfg.get("sheet_url")
     nodes_gid = cfg.get("nodes_gid")
@@ -158,6 +380,9 @@ def build_inventory(cfg: dict[str, Any], *, use_tailscale: bool = True) -> dict[
     hostvars: dict[str, dict[str, Any]] = {}
     groups: dict[str, set[str]] = {}
     oxidized_device_rows: list[dict[str, str]] = []
+    proxmox_guest_node_map: dict[str, str] = {}
+    proxmox_guest_vmid_map: dict[str, str] = {}
+    proxmox_guest_type_map: dict[str, str] = {}
 
     for _, row in df.iterrows():
         row_dict = row.to_dict()
@@ -207,6 +432,44 @@ def build_inventory(cfg: dict[str, Any], *, use_tailscale: bool = True) -> dict[
             if not parse_bool(row_dict.get(accept_ts_routes_col), default=True):
                 groups.setdefault("ts_skip_route_accept", set()).add(hostname)
 
+        # Optional Proxmox metadata for all managed guests. This supports
+        # tasks that delegate from a guest to its Proxmox node.
+        proxmox_guest_name = ""
+        if proxmox_guest_name_col in set(df.columns):
+            proxmox_guest_name = as_str(row_dict.get(proxmox_guest_name_col))
+        if proxmox_guest_name:
+            hostvars[hostname]["proxmox_guest_name"] = proxmox_guest_name
+
+        # Column normalization converts "Proxmox Node" -> proxmox_node.
+        proxmox_node = ""
+        if proxmox_node_col in set(df.columns):
+            proxmox_node = as_str(row_dict.get(proxmox_node_col))
+        if not proxmox_node and "proxmox_node" in set(df.columns):
+            proxmox_node = as_str(row_dict.get("proxmox_node"))
+        if proxmox_node:
+            hostvars[hostname]["proxmox_node"] = proxmox_node
+            proxmox_guest_node_map[hostname] = proxmox_node
+
+        proxmox_vmid = ""
+        if proxmox_vmid_col in set(df.columns):
+            proxmox_vmid = normalize_vmid(row_dict.get(proxmox_vmid_col))
+        if not proxmox_vmid and "proxmox_vmid" in set(df.columns):
+            proxmox_vmid = normalize_vmid(row_dict.get("proxmox_vmid"))
+        if not proxmox_vmid and "vmid" in set(df.columns):
+            proxmox_vmid = normalize_vmid(row_dict.get("vmid"))
+        if proxmox_vmid:
+            hostvars[hostname]["proxmox_vmid"] = proxmox_vmid
+            proxmox_guest_vmid_map[hostname] = proxmox_vmid
+
+        proxmox_type = ""
+        if proxmox_type_col in set(df.columns):
+            proxmox_type = as_str(row_dict.get(proxmox_type_col)).lower()
+        if not proxmox_type and "proxmox_type" in set(df.columns):
+            proxmox_type = as_str(row_dict.get("proxmox_type")).lower()
+        if proxmox_type:
+            hostvars[hostname]["proxmox_type"] = proxmox_type
+            proxmox_guest_type_map[hostname] = proxmox_type
+
         # Proxmox DNS hostvars (only for hosts in the proxmox_dns group)
         if "proxmox_dns" in host_groups:
             nameserver = ""
@@ -225,39 +488,23 @@ def build_inventory(cfg: dict[str, Any], *, use_tailscale: bool = True) -> dict[
             if searchdomain:
                 hostvars[hostname]["proxmox_searchdomain"] = searchdomain
 
-            # Optional identifiers to avoid ambiguous API lookups
-            if proxmox_guest_name_col in set(df.columns):
-                proxmox_guest_name = as_str(row_dict.get(proxmox_guest_name_col))
-                if proxmox_guest_name:
-                    hostvars[hostname]["proxmox_guest_name"] = proxmox_guest_name
+    # Query Proxmox for authoritative guest metadata and use it to fill/refresh
+    # host -> {node, vmid, type} mappings.
+    discovered_guests = discover_proxmox_guest_inventory(cfg)
+    for hostname, vars_for_host in hostvars.items():
+        lookup_name = as_str(vars_for_host.get("proxmox_guest_name")) or hostname
+        guest_meta = discovered_guests.get(lookup_name.lower())
+        if not guest_meta:
+            continue
 
-            # Column normalization converts "Proxmox Node" -> proxmox_node
-            if proxmox_node_col in set(df.columns):
-                proxmox_node = as_str(row_dict.get(proxmox_node_col))
-                if proxmox_node:
-                    hostvars[hostname]["proxmox_node"] = proxmox_node
-            if "proxmox_node" in set(df.columns):
-                proxmox_node = as_str(row_dict.get("proxmox_node"))
-                if proxmox_node:
-                    hostvars[hostname]["proxmox_node"] = proxmox_node
+        vars_for_host["proxmox_guest_name"] = guest_meta["name"]
+        vars_for_host["proxmox_node"] = guest_meta["node"]
+        vars_for_host["proxmox_vmid"] = guest_meta["vmid"]
+        vars_for_host["proxmox_type"] = guest_meta["type"]
 
-            if proxmox_vmid_col in set(df.columns):
-                proxmox_vmid = as_str(row_dict.get(proxmox_vmid_col))
-                if proxmox_vmid:
-                    hostvars[hostname]["proxmox_vmid"] = proxmox_vmid
-            if "vmid" in set(df.columns):
-                proxmox_vmid = as_str(row_dict.get("vmid"))
-                if proxmox_vmid:
-                    hostvars[hostname]["proxmox_vmid"] = proxmox_vmid
-
-            if proxmox_type_col in set(df.columns):
-                proxmox_type = as_str(row_dict.get(proxmox_type_col)).lower()
-                if proxmox_type:
-                    hostvars[hostname]["proxmox_type"] = proxmox_type
-            if "proxmox_type" in set(df.columns):
-                proxmox_type = as_str(row_dict.get("proxmox_type")).lower()
-                if proxmox_type:
-                    hostvars[hostname]["proxmox_type"] = proxmox_type
+        proxmox_guest_node_map[hostname] = guest_meta["node"]
+        proxmox_guest_vmid_map[hostname] = guest_meta["vmid"]
+        proxmox_guest_type_map[hostname] = guest_meta["type"]
 
     # Assign oxidized_devices list to the host named "oxidized" (or hosts in
     # an "oxidized" group if one exists)
@@ -272,9 +519,20 @@ def build_inventory(cfg: dict[str, Any], *, use_tailscale: bool = True) -> dict[
     unique_hosts = sorted(set(hosts))
     group_names = sorted(groups.keys())
 
+    all_group: dict[str, Any] = {"hosts": unique_hosts, "children": group_names}
+    if proxmox_guest_node_map or proxmox_guest_vmid_map or proxmox_guest_type_map:
+        all_vars: dict[str, Any] = {}
+        if proxmox_guest_node_map:
+            all_vars["proxmox_guest_node_map"] = dict(sorted(proxmox_guest_node_map.items()))
+        if proxmox_guest_vmid_map:
+            all_vars["proxmox_guest_vmid_map"] = dict(sorted(proxmox_guest_vmid_map.items()))
+        if proxmox_guest_type_map:
+            all_vars["proxmox_guest_type_map"] = dict(sorted(proxmox_guest_type_map.items()))
+        all_group["vars"] = all_vars
+
     inventory: dict[str, Any] = {
         "_meta": {"hostvars": hostvars},
-        "all": {"hosts": unique_hosts, "children": group_names},
+        "all": all_group,
     }
 
     for group in group_names:

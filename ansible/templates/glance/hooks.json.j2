@@ -1,0 +1,42 @@
+[
+  {
+    "id": "{{ glance_webhook_id }}",
+    "execute-command": "{{ glance_webhook_script_path }}",
+    "command-working-directory": "{{ glance_webhook_workdir }}",
+    "response-message": "ok",
+    "trigger-rule": {
+      "and": [
+        {
+          "match": {
+            "type": "value",
+            "value": "Basic {{ glance_webhook_secret }}",
+            "parameter": {
+              "source": "header",
+              "name": "Authorization"
+            }
+          }
+        },
+        {
+          "match": {
+            "type": "value",
+            "value": "push",
+            "parameter": {
+              "source": "header",
+              "name": "X-Gitea-Event"
+            }
+          }
+        },
+        {
+          "match": {
+            "type": "value",
+            "value": "refs/heads/{{ glance_config_repo_version }}",
+            "parameter": {
+              "source": "payload",
+              "name": "ref"
+            }
+          }
+        }
+      ]
+    }
+  }
+]

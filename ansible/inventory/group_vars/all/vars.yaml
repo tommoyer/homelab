@@ -49,6 +49,7 @@ proxmox_api_token_secret: "{{ lookup('env', 'PROXMOX_API_TOKEN_SECRET') }}"
 # -----------------------------------------------------------------------------
 
 kanidm_uri: "https://kanidm.moyer.wtf"
+kanidm_hostname: "kanidm.mgmt.moyer.wtf"
 
 kanidm_login_groups:
   - "linux_users"
@@ -75,6 +76,9 @@ kanidm_service_account_enabled: false
 kanidm_service_account_token: ""
 kanidm_service_account_token_path: "/etc/kanidm/unixd_token"
 
+kanidm_ldap_base_dn: "dc=kanidm,dc=moyer,dc=wtf"
+kanidm_ldap_uri: "ldaps://kanidm.mgmt.moyer.wtf:636"
+
 # --- homelab_node role feature flags ---
 homelab_node_bootstrap_enabled: false  # Enable per-host only when bootstrapping new nodes
 homelab_node_apt_cacher_ng_enabled: true
@@ -82,3 +86,4 @@ homelab_node_hardening_enabled: true
 homelab_node_kanidm_enabled: true
 homelab_node_node_exporter_enabled: true
 homelab_node_tailscale_enabled: true
+homelab_node_tailscale_up_skip: false

@@ -24,7 +24,8 @@
     service_name: "{{ inventory_hostname }}"
     compose_base_dir: /home/ansible
     compose_deploy_dir: "{{ compose_base_dir }}/{{ service_name }}"
-    _compose_file_src: "{{ playbook_dir }}/../files/uptime-kuma/docker-compose.yaml"
+    _compose_template_j2: "{{ playbook_dir }}/../templates/{{ service_name }}/docker-compose.yaml.j2"
+    _compose_template_plain: "{{ playbook_dir }}/../files/{{ service_name }}/docker-compose.yaml"
     _env_template_dir: "{{ playbook_dir }}/../templates/uptime-kuma"
     _env_template_glob: "{{ _env_template_dir }}/*.env.j2"
 
@@ -86,6 +87,32 @@
     # -------------------------------------------------------------------------
     # Pre-flight checks (run on controller, not on the remote host)
     # -------------------------------------------------------------------------
+    - name: Check whether Jinja2 compose template exists on controller
+      ansible.builtin.stat:
+        path: "{{ _compose_template_j2 }}"
+      delegate_to: localhost
+      become: false
+      register: _compose_template_j2_stat
+
+    - name: Check whether plain compose file exists on controller
+      ansible.builtin.stat:
+        path: "{{ _compose_template_plain }}"
+      delegate_to: localhost
+      become: false
+      register: _compose_template_plain_stat
+
+    - name: Fail when no compose template found for host
+      ansible.builtin.fail:
+        msg: >-
+          No compose template found for host '{{ inventory_hostname }}'.
+          Checked: {{ _compose_template_j2 }} and {{ _compose_template_plain }}
+      when: not _compose_template_j2_stat.stat.exists and not _compose_template_plain_stat.stat.exists
+
+    - name: Set compose template path
+      ansible.builtin.set_fact:
+        _compose_template: >-
+          {{ _compose_template_j2 if _compose_template_j2_stat.stat.exists else _compose_template_plain }}
+
     - name: Check whether env template directory exists on controller
       ansible.builtin.stat:
         path: "{{ _env_template_dir }}"
@@ -122,8 +149,8 @@
     # Deploy compose file and optional env files
     # -------------------------------------------------------------------------
     - name: Deploy docker-compose.yaml
-      ansible.builtin.copy:
-        src: "{{ _compose_file_src }}"
+      ansible.builtin.template:
+        src: "{{ _compose_template }}"
         dest: "{{ compose_deploy_dir }}/docker-compose.yaml"
         owner: ansible
         group: ansible
