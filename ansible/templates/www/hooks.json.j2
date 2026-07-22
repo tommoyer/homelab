@@ -1,0 +1,42 @@
+[
+  {
+    "id": "{{ laptop_bootstrap_webhook_id }}",
+    "execute-command": "{{ laptop_bootstrap_webhook_script_path }}",
+    "command-working-directory": "{{ laptop_bootstrap_webhook_workdir }}",
+    "response-message": "ok",
+    "trigger-rule": {
+      "and": [
+        {
+          "match": {
+            "type": "value",
+            "value": "Basic {{ laptop_bootstrap_webhook_secret }}",
+            "parameter": {
+              "source": "header",
+              "name": "Authorization"
+            }
+          }
+        },
+        {
+          "match": {
+            "type": "value",
+            "value": "push",
+            "parameter": {
+              "source": "header",
+              "name": "X-Gitea-Event"
+            }
+          }
+        },
+        {
+          "match": {
+            "type": "value",
+            "value": "refs/heads/main",
+            "parameter": {
+              "source": "payload",
+              "name": "ref"
+            }
+          }
+        }
+      ]
+    }
+  }
+]

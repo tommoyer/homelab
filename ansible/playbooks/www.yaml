@@ -28,6 +28,7 @@
     _compose_template_plain: "{{ playbook_dir }}/../files/{{ service_name }}/docker-compose.yaml"
     _env_template_dir: "{{ playbook_dir }}/../templates/www"
     _env_template_glob: "{{ _env_template_dir }}/*.env.j2"
+    _laptop_bootstrap_archive_host_path: "{{ compose_deploy_dir }}/data/laptop.tar.gz"
 
   tasks:
     - name: Ensure gitea.priv.moyer.wtf is present in /etc/hosts
@@ -98,6 +99,22 @@
         mode: "0750"
       when: _env_template_dir_stat.stat.exists and _env_template_dir_stat.stat.isdir
 
+    - name: Ensure archive publish directory exists
+      ansible.builtin.file:
+        path: "{{ compose_deploy_dir }}/data"
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0755"
+
+    - name: Ensure laptop archive placeholder file exists
+      ansible.builtin.file:
+        path: "{{ _laptop_bootstrap_archive_host_path }}"
+        state: touch
+        owner: ansible
+        group: ansible
+        mode: "0644"
+
     # -------------------------------------------------------------------------
     # Deploy compose file and optional env files
     # -------------------------------------------------------------------------
@@ -148,3 +165,109 @@
         'Started' in _compose_up.stdout or
         'Created' in _compose_up.stdout or
         'Recreated' in _compose_up.stdout
+
+    # -------------------------------------------------------------------------
+    # Setup webhook listener for www configuration updates
+    # -------------------------------------------------------------------------
+
+- name: Deploy www webhook listener pieces
+  hosts: www
+  become: true
+  vars:
+    laptop_bootstrap_webhook_packages:
+      - curl
+      - webhook
+  tasks:
+    - name: Install prerequisite packages
+      ansible.builtin.package:
+        name: "{{ laptop_bootstrap_webhook_packages }}"
+        state: present
+      when: laptop_bootstrap_webhook_enabled
+
+    - name: Create deploy group
+      ansible.builtin.group:
+        name: "{{ laptop_bootstrap_deploy_group }}"
+        system: true
+      when: laptop_bootstrap_webhook_enabled
+
+    - name: Create deploy user
+      ansible.builtin.user:
+        name: "{{ laptop_bootstrap_deploy_user }}"
+        group: "{{ laptop_bootstrap_deploy_group }}"
+        system: true
+        home: "{{ laptop_bootstrap_webhook_workdir }}"
+        shell: /usr/sbin/nologin
+        create_home: false
+        groups:
+          - docker
+          - ansible
+        append: true
+      when: laptop_bootstrap_webhook_enabled
+
+    - name: Create directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner | default(laptop_bootstrap_deploy_user) }}"
+        group: "{{ item.group | default(laptop_bootstrap_deploy_group) }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ laptop_bootstrap_webhook_workdir }}", mode: "0755" }
+        - { path: "{{ laptop_bootstrap_live_config_path }}", mode: "0755" }
+        - { path: "/etc/webhook", owner: "{{ laptop_bootstrap_deploy_user }}", group: "{{ laptop_bootstrap_deploy_group }}", mode: "0755" }
+      when: laptop_bootstrap_webhook_enabled
+
+    - name: Install deploy script
+      ansible.builtin.template:
+        src: ../templates/www/deploy-laptop-bootstrap.sh.j2
+        dest: "{{ laptop_bootstrap_webhook_script_path }}"
+        owner: "{{ laptop_bootstrap_deploy_user }}"
+        group: "{{ laptop_bootstrap_deploy_group }}"
+        mode: "0755"
+      when: laptop_bootstrap_webhook_enabled
+
+    - name: Install webhook hook definition
+      ansible.builtin.template:
+        src: ../templates/www/hooks.json.j2
+        dest: "{{ laptop_bootstrap_webhook_hooks_file }}"
+        owner: "{{ laptop_bootstrap_deploy_user }}"
+        group: "{{ laptop_bootstrap_deploy_group }}"
+        mode: "0640"
+      notify: Restart webhook
+      when: laptop_bootstrap_webhook_enabled
+
+    - name: Install webhook systemd unit
+      ansible.builtin.template:
+        src: ../templates/www/webhook.service.j2
+        dest: /etc/systemd/system/webhook.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Reload systemd
+        - Restart webhook
+      when: laptop_bootstrap_webhook_enabled
+
+    - name: Enable and start webhook service
+      ansible.builtin.systemd:
+        name: webhook.service
+        enabled: true
+        state: started
+      when: laptop_bootstrap_webhook_enabled
+
+    - name: Run the initial deploy script to populate live config
+      ansible.builtin.command:
+        cmd: "{{ laptop_bootstrap_webhook_script_path }}"
+      become: true
+      become_user: "{{ laptop_bootstrap_deploy_user }}"
+      when: laptop_bootstrap_webhook_enabled
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart webhook
+      ansible.builtin.systemd:
+        name: webhook.service
+        state: restarted

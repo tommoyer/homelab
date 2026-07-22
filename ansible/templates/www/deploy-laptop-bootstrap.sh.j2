@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ARCHIVE_URL="{{ laptop_bootstrap_archive_url }}"
+ARCHIVE_PATH="{{ laptop_bootstrap_archive_output_path }}"
+ARCHIVE_DIR="$(dirname "$ARCHIVE_PATH")"
+
+mkdir -p "$ARCHIVE_DIR"
+
+TMPFILE="$(mktemp "$ARCHIVE_DIR/.laptop.tar.gz.tmp.XXXXXX")"
+trap 'rm -f "$TMPFILE"' EXIT
+
+curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 120 "$ARCHIVE_URL" -o "$TMPFILE"
+chmod 0644 "$TMPFILE"
+mv -f "$TMPFILE" "$ARCHIVE_PATH"

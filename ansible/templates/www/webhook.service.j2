@@ -1,0 +1,25 @@
+[Unit]
+Description=Webhook listener for laptop bootstrap archive deploys
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ laptop_bootstrap_deploy_user }}
+Group={{ laptop_bootstrap_deploy_group }}
+ExecStart=/usr/bin/webhook \
+  -hooks {{ laptop_bootstrap_webhook_hooks_file }} \
+  -hotreload \
+  -verbose \
+  -port {{ laptop_bootstrap_webhook_port }}
+Restart=on-failure
+RestartSec=5
+WorkingDirectory={{ laptop_bootstrap_webhook_workdir }}
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ laptop_bootstrap_live_config_path }} /run
+
+[Install]
+WantedBy=multi-user.target

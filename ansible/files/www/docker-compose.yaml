@@ -15,4 +15,6 @@ services:
     image: gitea.priv.moyer.wtf/tmoyer/www:latest
     ports:
       - "8080:8080"
+    volumes:
+      - /opt/laptop_bootstrap-deploy/laptop.tar.gz:/usr/share/nginx/html/laptop.tar.gz:ro
     restart: unless-stopped

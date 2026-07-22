@@ -58,6 +58,3 @@ glance_gitea_ssh_private_key: !vault |
 
 glance_gitea_ssh_host: gitea-ssh.priv.moyer.wtf
 glance_gitea_known_host_key: "gitea-ssh.priv.moyer.wtf ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIYIJNNivlj3u7KXZZ3ayAyeCPFXMxJDMsYalP3Ruq3l"
-
-homelab_node_tailscale_extra_hosts:
-  - "192.168.30.12 gitea-ssh.priv.moyer.wtf"

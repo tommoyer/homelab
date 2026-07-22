@@ -4,6 +4,6 @@ services:
     image: glanceapp/glance
     restart: unless-stopped
     volumes:
-      - ./config:/app/config
+      - "{{ glance_config_repo_path }}:/app/config"
     ports:
       - 8080:8080

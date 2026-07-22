@@ -1,0 +1,23 @@
+laptop_bootstrap_webhook_enabled: true
+
+laptop_bootstrap_deploy_user: laptop-bootstrap-deploy
+laptop_bootstrap_deploy_group: laptop-bootstrap-deploy
+
+laptop_bootstrap_webhook_port: 9000
+laptop_bootstrap_webhook_id: deploy-laptop-bootstrap
+laptop_bootstrap_webhook_secret: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          64356561653736646132303435333438656131366638626132373234306230366163306136353836
+          3831353131633163363865613537323335366665663232380a396639663833653266313434336462
+          66623762633639643762663034653161623364383736646366393632643133326131663466346536
+          3765376461616565350a363963306135376331373264363131663035643835396131613862356436
+          30353763366234323864623135623333386437663665353134663865373735313538666562393231
+          3736613032313932333864323565353461376562383664396638
+
+laptop_bootstrap_live_config_path: /opt/laptop_bootstrap-deploy/
+laptop_bootstrap_archive_url: "https://gitea.priv.moyer.wtf/tmoyer/laptop/archive/main.tar.gz"
+laptop_bootstrap_archive_output_path: "{{ laptop_bootstrap_live_config_path }}/laptop.tar.gz"
+
+laptop_bootstrap_webhook_workdir: /opt/laptop_bootstrap-deploy
+laptop_bootstrap_webhook_hooks_file: /etc/webhook/hooks.json
+laptop_bootstrap_webhook_script_path: /opt/laptop_bootstrap-deploy/deploy-laptop_bootstrap.sh

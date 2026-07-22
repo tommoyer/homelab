@@ -2,7 +2,6 @@
 set -euo pipefail
 
 REPO_DIR="{{ glance_config_repo_path }}"
-LIVE_DIR="{{ glance_live_config_path }}"
 BRANCH="{{ glance_config_repo_version }}"
 
 cd "$REPO_DIR"
@@ -16,10 +15,3 @@ docker run --rm \
   glanceapp/glance:latest \
   config:print >/dev/null
 {% endif %}
-
-rsync -av --delete \
-  --no-owner --no-group --no-perms --omit-dir-times \
-  "$REPO_DIR/glance.yml" \
-  "$REPO_DIR/pages/" \
-  "$REPO_DIR/assets/" \
-  "$LIVE_DIR/"
